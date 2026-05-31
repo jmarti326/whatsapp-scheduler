@@ -1,4 +1,5 @@
 # 📋 Team Scheduler Bot
+### Codename: *Project Levitas*
 
 A WhatsApp bot for automating team scheduling reminders and attendance polls using [Baileys](https://github.com/WhiskeySockets/Baileys). Built for any recurring service team — audiovisual, worship, ushers, volunteers, and more.
 
