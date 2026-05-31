@@ -173,11 +173,9 @@
                         <input id="sched-date" type="date" class="border border-gray-300 rounded-lg px-3 py-2.5 text-sm">
                     </div>
                     <div class="flex flex-col gap-1">
-                        <label for="sched-day-type" class="text-xs text-gray-500 font-medium">Day Type</label>
-                        <select id="sched-day-type" class="border border-gray-300 rounded-lg px-3 py-2.5 text-sm">
-                            <option value="thursday">Thursday</option>
-                            <option value="sunday">Sunday</option>
-                        </select>
+                        <label class="text-xs text-gray-500 font-medium">Day Type</label>
+                        <div id="sched-day-type-display" class="border border-gray-200 bg-gray-50 rounded-lg px-3 py-2.5 text-sm text-gray-500 min-w-[100px]">Select a date</div>
+                        <input type="hidden" id="sched-day-type" value="">
                     </div>
                     <div class="flex flex-col gap-1 flex-1">
                         <label for="sched-member" class="text-xs text-gray-500 font-medium">Person</label>
@@ -709,12 +707,42 @@
             `
         }
 
+        // Auto-detect day type from selected date
+        document.getElementById('sched-date').addEventListener('change', function() {
+            const dateVal = this.value
+            const display = document.getElementById('sched-day-type-display')
+            const hidden = document.getElementById('sched-day-type')
+            if (!dateVal) {
+                display.textContent = 'Select a date'
+                display.className = 'border border-gray-200 bg-gray-50 rounded-lg px-3 py-2.5 text-sm text-gray-500 min-w-[100px]'
+                hidden.value = ''
+                return
+            }
+            const [y, m, d] = dateVal.split('-').map(Number)
+            const day = new Date(y, m - 1, d).getDay()
+            if (day === 4) {
+                hidden.value = 'thursday'
+                display.textContent = '📅 Thursday'
+                display.className = 'border border-blue-200 bg-blue-50 rounded-lg px-3 py-2.5 text-sm text-blue-700 font-medium min-w-[100px]'
+            } else if (day === 0) {
+                hidden.value = 'sunday'
+                display.textContent = '📅 Sunday'
+                display.className = 'border border-purple-200 bg-purple-50 rounded-lg px-3 py-2.5 text-sm text-purple-700 font-medium min-w-[100px]'
+            } else {
+                const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+                hidden.value = ''
+                display.textContent = `⚠️ ${dayNames[day]} (pick Thu or Sun)`
+                display.className = 'border border-amber-200 bg-amber-50 rounded-lg px-3 py-2.5 text-sm text-amber-700 font-medium min-w-[100px]'
+            }
+        })
+
         async function addSchedule() {
             const service_date = document.getElementById('sched-date').value
             const day_type = document.getElementById('sched-day-type').value
             const member_id = document.getElementById('sched-member').value
             const role = document.getElementById('sched-role').value
             if (!service_date || !member_id) return showToast('Please pick a date and select a person', 'error')
+            if (!day_type) return showToast('⚠️ Please pick a Thursday or Sunday date', 'error')
             await fetch('/api/schedule', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ service_date, day_type, member_id: parseInt(member_id), role }) })
             showToast('✅ Schedule entry added!', 'success')
             loadSchedule()
