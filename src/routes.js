@@ -159,6 +159,15 @@ router.post('/api/schedule', async (req, res) => {
         if (!service_date || !day_type || !member_id) {
             return res.status(400).json({ error: 'service_date, day_type, and member_id required' })
         }
+        // Only allow Thursday or Sunday service days
+        const [y, m, d] = service_date.split('-').map(Number)
+        const dayOfWeek = new Date(y, m - 1, d).getDay()
+        if ((day_type === 'thursday' && dayOfWeek !== 4) || (day_type === 'sunday' && dayOfWeek !== 0)) {
+            return res.status(400).json({ error: 'Date does not match the day type' })
+        }
+        if (dayOfWeek !== 4 && dayOfWeek !== 0) {
+            return res.status(400).json({ error: 'Only Thursday or Sunday dates are allowed' })
+        }
         const memberRole = role || 'primary'
         await db.run(
             'INSERT OR IGNORE INTO schedule_entries (service_date, day_type, member_id, role) VALUES (?, ?, ?, ?)',
