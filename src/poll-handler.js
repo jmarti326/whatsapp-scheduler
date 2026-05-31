@@ -187,4 +187,93 @@ async function notifyBackup(poll, voterJid, sendTextMessage) {
     console.log(`[POLL-HANDLER] ✅ Backup notification complete for ${voterMember.name} → ${backups.map(b => b.name).join(', ')}`)
 }
 
-module.exports = { initPollTracking, trackPoll, handlePollVote }
+/**
+ * Send a follow-up DM to primaries who haven't responded to today's poll.
+ * Called by cron at 3:00 PM AST on Thu and Sat.
+ */
+async function remindNonResponders(dayType, sendTextMessage) {
+    const db = await getDb()
+
+    // Find today's poll for this day type
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Puerto_Rico' })
+    const poll = await db.get(
+        `SELECT * FROM active_polls WHERE day_type = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1`,
+        dayType, today
+    )
+
+    if (!poll) {
+        console.log(`[POLL-HANDLER] ℹ️ No active ${dayType} poll found for today, skipping reminder`)
+        return { skipped: true, reason: 'no_poll' }
+    }
+
+    // Get primaries assigned for this service date
+    const primaries = await db.all(`
+        SELECT tm.name, tm.phone
+        FROM team_members tm
+        JOIN schedule_entries se ON se.member_id = tm.id
+        WHERE se.service_date = ? AND se.day_type = ? AND se.role = 'primary'
+    `, poll.service_date, dayType)
+
+    if (primaries.length === 0) {
+        console.log(`[POLL-HANDLER] ℹ️ No primaries for ${dayType} ${poll.service_date}`)
+        return { skipped: true, reason: 'no_primaries' }
+    }
+
+    // Get who already responded
+    const responses = await db.all(
+        `SELECT voter_jid FROM poll_responses WHERE poll_msg_id = ?`,
+        poll.poll_msg_id
+    )
+    const respondedPhones = new Set(
+        responses.map(r => r.voter_jid.replace('@s.whatsapp.net', ''))
+    )
+
+    // Find who hasn't responded
+    const nonResponders = primaries.filter(m => !respondedPhones.has(m.phone))
+
+    if (nonResponders.length === 0) {
+        console.log(`[POLL-HANDLER] ✅ All primaries responded to ${dayType} poll`)
+        return { skipped: true, reason: 'all_responded' }
+    }
+
+    // Check if we already sent reminders today
+    const reminderKey = `${today}:poll-reminder-${dayType}`
+    const alreadySent = await db.get(
+        `SELECT 1 FROM message_logs WHERE message_key = ?`, reminderKey
+    )
+    if (alreadySent) {
+        console.log(`[POLL-HANDLER] ⏭️ Poll reminders already sent: ${reminderKey}`)
+        return { skipped: true, reason: 'already_sent' }
+    }
+
+    const dayLabel = dayType === 'thursday' ? 'hoy jueves' : 'mañana domingo'
+    let sentCount = 0
+
+    for (const member of nonResponders) {
+        const jid = `${member.phone}@s.whatsapp.net`
+        const text = `👋 Hola ${member.name},\n\n` +
+            `Aún no has respondido la encuesta de asistencia para *${dayLabel}*. ` +
+            `¿Podrás estar? 🙏\n\n` +
+            `Por favor responde en el grupo para que podamos confirmar el equipo.` + AUTO_FOOTER
+
+        try {
+            await sendTextMessage(jid, text)
+            console.log(`[POLL-HANDLER] 📨 Reminder sent to ${member.name}`)
+            sentCount++
+            await new Promise(resolve => setTimeout(resolve, 2000))
+        } catch (err) {
+            console.error(`[POLL-HANDLER] ❌ Failed reminder to ${member.name}:`, err.message)
+        }
+    }
+
+    // Log so we don't send again today
+    await db.run(
+        `INSERT OR IGNORE INTO message_logs (message_key, message_type, content) VALUES (?, ?, ?)`,
+        reminderKey, `poll-reminder-${dayType}`, `Reminded ${sentCount}/${nonResponders.length}: ${nonResponders.map(m => m.name).join(', ')}`
+    )
+
+    console.log(`[POLL-HANDLER] ✅ Reminders sent: ${sentCount}/${nonResponders.length} non-responders`)
+    return { sent: true, count: sentCount, total: nonResponders.length, names: nonResponders.map(m => m.name) }
+}
+
+module.exports = { initPollTracking, trackPoll, handlePollVote, remindNonResponders }

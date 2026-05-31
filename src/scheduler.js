@@ -2,7 +2,7 @@ const cron = require('node-cron')
 const { getDb } = require('./db/index')
 const { sendTextMessage, sendPoll, getStatus } = require('./bot')
 const { buildMondaySummary, buildWednesdayReminder, buildThursdayPoll, buildSaturdayReminder, buildSaturdayPoll, buildPersonalNotifications, getWeekDates } = require('./messages')
-const { initPollTracking, trackPoll } = require('./poll-handler')
+const { initPollTracking, trackPoll, remindNonResponders } = require('./poll-handler')
 
 async function getGroupJid() {
     const db = await getDb()
@@ -165,8 +165,21 @@ function startScheduler() {
     // Poll for queued sends from the API every 10 seconds
     setInterval(processPendingSends, 10000)
 
+    // Thursday 3:00 PM AST — Remind primaries who haven't responded to today's poll
+    cron.schedule('0 15 * * 4', async () => {
+        console.log('[CRON] Thursday poll reminder triggered')
+        await remindNonResponders('thursday', sendTextMessage)
+    }, { timezone: 'America/Puerto_Rico' })
+
+    // Saturday 3:00 PM AST — Remind primaries who haven't responded to Sunday poll
+    cron.schedule('0 15 * * 6', async () => {
+        console.log('[CRON] Saturday poll reminder triggered')
+        await remindNonResponders('sunday', sendTextMessage)
+    }, { timezone: 'America/Puerto_Rico' })
+
     console.log('[SCHEDULER] ✅ Cron jobs started (Mon/Wed/Thu/Sat at 8:00 AM AST)')
     console.log('[SCHEDULER] 📨 Personal DMs enabled for Wed (Thu team) and Sat (Sun team)')
+    console.log('[SCHEDULER] ⏰ Poll reminders at 3:00 PM AST (Thu & Sat) for non-responders')
 }
 
 async function processPendingSends() {
