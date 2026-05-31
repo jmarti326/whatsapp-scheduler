@@ -1,7 +1,8 @@
 const cron = require('node-cron')
 const { getDb } = require('./db/index')
 const { sendTextMessage, sendPoll, getStatus } = require('./bot')
-const { buildMondaySummary, buildWednesdayReminder, buildThursdayPoll, buildSaturdayReminder, buildSaturdayPoll, buildPersonalNotifications } = require('./messages')
+const { buildMondaySummary, buildWednesdayReminder, buildThursdayPoll, buildSaturdayReminder, buildSaturdayPoll, buildPersonalNotifications, getWeekDates } = require('./messages')
+const { initPollTracking, trackPoll } = require('./poll-handler')
 
 async function getGroupJid() {
     const db = await getDb()
@@ -48,14 +49,25 @@ async function sendScheduledMessage(type, buildFn, forceSend = false, dateOverri
 
     try {
         if (type === 'thursday-poll') {
-            const { pollName, values, mentions } = await buildThursdayPoll(today)
-            await sendPoll(groupJid, pollName, values, 1, mentions)
+            const today2 = dateOverride || getToday()
+            const { pollName, values, mentions } = await buildThursdayPoll(today2)
+            const sentMsg = await sendPoll(groupJid, pollName, values, 1, mentions)
+            // Track poll for vote monitoring
+            const { thursday } = getWeekDates(today2)
+            if (sentMsg?.key) await trackPoll(sentMsg.key, groupJid, thursday, 'thursday')
             await logMessage(key, type, pollName)
             console.log(`[SCHEDULER] ✅ Sent: ${type}`)
             return { sent: true, key, content: pollName }
         } else if (type === 'saturday-poll') {
-            const { pollName, values, mentions } = await buildSaturdayPoll(today)
-            await sendPoll(groupJid, pollName, values, 1, mentions)
+            const today2 = dateOverride || getToday()
+            const { pollName, values, mentions } = await buildSaturdayPoll(today2)
+            const sentMsg = await sendPoll(groupJid, pollName, values, 1, mentions)
+            // Track poll for vote monitoring — service date is tomorrow (Sunday)
+            const parts = today2.split('-')
+            const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]))
+            date.setDate(date.getDate() + 1)
+            const sunday = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+            if (sentMsg?.key) await trackPoll(sentMsg.key, groupJid, sunday, 'sunday')
             await logMessage(key, type, pollName)
             console.log(`[SCHEDULER] ✅ Sent: ${type}`)
             return { sent: true, key, content: pollName }
@@ -114,6 +126,9 @@ async function sendPersonalDMs(today, dayType) {
 }
 
 function startScheduler() {
+    // Initialize poll tracking tables
+    initPollTracking().catch(err => console.error('[SCHEDULER] Poll tracking init error:', err.message))
+
     // Monday 8:00 AM AST — Weekly summary + personal DMs for Thursday team
     cron.schedule('0 8 * * 1', async () => {
         console.log('[CRON] Monday summary triggered')

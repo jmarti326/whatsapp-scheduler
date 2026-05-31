@@ -2,6 +2,7 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const pino = require('pino')
 const path = require('path')
 const { getDb } = require('./db/index')
+const { initPollTracking, handlePollVote } = require('./poll-handler')
 
 const logger = pino({ level: 'silent' })
 const AUTH_PATH = path.join(__dirname, '..', 'data', 'auth_info')
@@ -112,6 +113,19 @@ async function connectBot() {
                 if (!groups[jid]) {
                     groups[jid] = { name: null, jid }
                     require('fs').writeFileSync(groupsFile, JSON.stringify(groups, null, 2))
+                }
+            }
+        }
+    })
+
+    // Listen for poll vote updates → trigger backup notifications
+    sock.ev.on('messages.update', async (updates) => {
+        for (const { key, update } of updates) {
+            if (update.pollUpdates && update.pollUpdates.length > 0) {
+                try {
+                    await handlePollVote(key, update.pollUpdates, sendTextMessage)
+                } catch (err) {
+                    console.error('[BOT] ❌ Poll vote handler error:', err.message)
                 }
             }
         }
