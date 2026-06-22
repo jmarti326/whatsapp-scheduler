@@ -353,6 +353,34 @@
                     <button onclick="changePassword()" class="bg-amber-500 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-amber-600 whitespace-nowrap">🔒 Update</button>
                 </div>
             </div>
+
+            <!-- WhatsApp Accounts (admin only) -->
+            <div id="accounts-section" class="card mt-3 hidden">
+                <h3 class="text-sm font-semibold text-gray-700 mb-1">📱 WhatsApp Accounts</h3>
+                <p class="text-xs text-gray-500 mb-3">Manage sender accounts with failover priority. Messages are sent via the highest-priority connected account; if it fails, the next one is tried automatically.</p>
+
+                <!-- Health Summary -->
+                <div id="accounts-health" class="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
+                    <div class="flex items-center gap-2">
+                        <span id="accounts-health-dot" class="w-2.5 h-2.5 rounded-full bg-gray-400"></span>
+                        <span id="accounts-health-text" class="text-sm text-gray-600">Loading...</span>
+                    </div>
+                </div>
+
+                <!-- Accounts List -->
+                <div id="accounts-list" class="space-y-2 mb-3"></div>
+
+                <!-- Add New Account -->
+                <div class="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                    <p class="text-xs text-gray-500 mb-2 font-medium">Register New Account</p>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input id="new-account-label" type="text" placeholder='Label (e.g. "Juan&#39;s iPhone")' class="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm" aria-label="Account label">
+                        <input id="new-account-phone" type="text" placeholder="Phone (e.g. 17875551234)" class="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm" aria-label="Phone number">
+                        <button onclick="addAccount()" class="bg-primary text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-indigo-700 whitespace-nowrap">➕ Add</button>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-2">After adding, a pairing code will be generated. Enter it on the phone in WhatsApp → Linked Devices → Link with phone number.</p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -482,8 +510,10 @@
                 const pill = document.getElementById('status-pill')
                 pill.innerHTML = data.connection === 'connected'
                     ? '<span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span><span class="text-green-700">Live</span>'
+                    : data.connection === 'degraded'
+                    ? '<span class="w-2 h-2 bg-amber-500 rounded-full animate-pulse"></span><span class="text-amber-700">Degraded</span>'
                     : '<span class="w-2 h-2 bg-amber-500 rounded-full"></span><span class="text-amber-700">Worker Offline</span>'
-                pill.className = `flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${data.connection === 'connected' ? 'bg-green-100' : 'bg-amber-100'}`
+                pill.className = `flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${data.connection === 'connected' ? 'bg-green-100' : data.connection === 'degraded' ? 'bg-amber-100' : 'bg-amber-100'}`
 
                 // Group display
                 const groupDisplay = data.groupAlias || (data.groupJid ? 'Configured ✓' : 'Not set up')
@@ -492,8 +522,10 @@
 
                 // Desktop header badge
                 const badge = document.getElementById('status-badge')
-                badge.textContent = data.connection === 'connected' ? '🟢 Online' : '🔴 Offline'
-                badge.className = `px-3 py-1.5 rounded-full text-xs font-semibold ${data.connection === 'connected' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`
+                const statusLabels = { connected: '🟢 Online', degraded: '🟡 Degraded', disconnected: '🔴 Offline' }
+                const statusClasses = { connected: 'bg-green-100 text-green-700', degraded: 'bg-amber-100 text-amber-700', disconnected: 'bg-red-100 text-red-700' }
+                badge.textContent = statusLabels[data.connection] || '🔴 Offline'
+                badge.className = `px-3 py-1.5 rounded-full text-xs font-semibold ${statusClasses[data.connection] || 'bg-red-100 text-red-700'}`
 
                 // Recent logs with friendly timestamps
                 const logsDiv = document.getElementById('recent-logs')
@@ -1007,7 +1039,9 @@
                 // Show all admin-only elements
                 document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'))
                 document.getElementById('users-section').classList.remove('hidden')
+                document.getElementById('accounts-section').classList.remove('hidden')
                 loadUsers()
+                loadAccounts()
             }
         }
 
@@ -1054,6 +1088,90 @@
             const res = await fetch('/api/users/change-password', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ currentPassword: curr, newPassword: newP }) })
             const data = await res.json()
             if (data.success) { showToast('✅ Password updated successfully!', 'success'); document.getElementById('curr-pass').value = ''; document.getElementById('new-password').value = '' }
+            else showToast('❌ ' + data.error, 'error')
+        }
+
+        // --- WhatsApp Accounts Management ---
+        async function loadAccounts() {
+            try {
+                const res = await fetch('/api/accounts/health')
+                if (res.status === 403 || res.status === 401) return
+                const data = await res.json()
+
+                // Update health indicator
+                const dot = document.getElementById('accounts-health-dot')
+                const text = document.getElementById('accounts-health-text')
+                const colors = { connected: 'bg-green-500', degraded: 'bg-amber-500', disconnected: 'bg-red-500', no_accounts: 'bg-gray-400' }
+                dot.className = `w-2.5 h-2.5 rounded-full ${colors[data.aggregate] || 'bg-gray-400'}`
+                const labels = { connected: `All ${data.total} account(s) connected`, degraded: `${data.connected}/${data.total} accounts connected`, disconnected: 'All accounts disconnected', no_accounts: 'No accounts registered' }
+                text.textContent = labels[data.aggregate] || data.aggregate
+
+                // Render accounts list
+                const div = document.getElementById('accounts-list')
+                if (!data.accounts || data.accounts.length === 0) {
+                    div.innerHTML = '<p class="text-sm text-gray-400 text-center py-2">No accounts registered yet.</p>'
+                    return
+                }
+                div.innerHTML = data.accounts.map((a, i) => {
+                    const statusColors = { connected: 'bg-green-100 text-green-700', disconnected: 'bg-red-100 text-red-700', logged_out: 'bg-gray-100 text-gray-700', waiting_for_pairing: 'bg-blue-100 text-blue-700' }
+                    const statusClass = statusColors[a.status] || 'bg-gray-100 text-gray-600'
+                    return `
+                        <div class="flex justify-between items-center bg-white border border-gray-200 rounded-lg px-3 py-2.5">
+                            <div class="flex items-center gap-2">
+                                <span class="bg-indigo-100 text-indigo-700 text-xs font-bold px-2 py-0.5 rounded">#${a.priority}</span>
+                                <div>
+                                    <span class="font-medium text-sm text-gray-900">${a.label}</span>
+                                    <span class="${statusClass} text-xs px-2 py-0.5 rounded ml-2">${a.status}</span>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-1">
+                                <button onclick="reconnectAccount('${a.id}', '${a.label}')" class="text-blue-500 hover:text-blue-700 text-xs font-medium px-2" title="Reconnect">🔄</button>
+                                <button onclick="removeAccount('${a.id}', '${a.label}')" class="text-red-500 hover:text-red-700 text-xs font-medium px-2" title="Remove">✕</button>
+                            </div>
+                        </div>
+                    `
+                }).join('')
+            } catch (err) {
+                console.error('Failed to load accounts:', err)
+            }
+        }
+
+        async function addAccount() {
+            const label = document.getElementById('new-account-label').value.trim()
+            const phoneNumber = document.getElementById('new-account-phone').value.trim()
+            if (!label) return showToast('Please enter a label for the account', 'error')
+            if (!phoneNumber) return showToast('Please enter the phone number for pairing', 'error')
+
+            const res = await fetch('/api/accounts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ label, phoneNumber })
+            })
+            const data = await res.json()
+            if (data.success) {
+                document.getElementById('new-account-label').value = ''
+                document.getElementById('new-account-phone').value = ''
+                let msg = `✅ Account "${label}" registered!`
+                if (data.pairingCode) msg += ` Pairing code: ${data.pairingCode}`
+                showToast(msg, 'success')
+                loadAccounts()
+            } else {
+                showToast('❌ ' + data.error, 'error')
+            }
+        }
+
+        async function removeAccount(id, label) {
+            if (!confirm(`Remove account "${label}"? This will disconnect it and delete its credentials.`)) return
+            const res = await fetch(`/api/accounts/${id}`, { method: 'DELETE' })
+            const data = await res.json()
+            if (data.success) { showToast(`Account "${label}" removed`, 'info'); loadAccounts() }
+            else showToast('❌ ' + data.error, 'error')
+        }
+
+        async function reconnectAccount(id, label) {
+            const res = await fetch(`/api/accounts/${id}/reconnect`, { method: 'POST' })
+            const data = await res.json()
+            if (data.success) { showToast(`🔄 Reconnecting "${label}"...`, 'info'); setTimeout(loadAccounts, 3000) }
             else showToast('❌ ' + data.error, 'error')
         }
 

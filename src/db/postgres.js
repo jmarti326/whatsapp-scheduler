@@ -38,6 +38,7 @@ function pgSql(sql) {
         const table = tableMatch ? tableMatch[1] : ''
         if (table === 'app_settings') return base + ' ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value'
         if (table === 'group_aliases') return base + ' ON CONFLICT (jid) DO UPDATE SET alias = EXCLUDED.alias'
+        if (table === 'wa_accounts') return base + ' ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label, phone_number = EXCLUDED.phone_number, priority = EXCLUDED.priority, status = EXCLUDED.status, last_connected_at = EXCLUDED.last_connected_at, last_error = EXCLUDED.last_error'
         return base + ' ON CONFLICT DO NOTHING'
     }
     return base
@@ -152,6 +153,36 @@ async function createDb() {
                     result TEXT,
                     created_at TIMESTAMPTZ DEFAULT now(),
                     processed_at TIMESTAMPTZ
+                );
+
+                CREATE TABLE IF NOT EXISTS wa_accounts (
+                    id TEXT PRIMARY KEY,
+                    label TEXT NOT NULL,
+                    phone_number TEXT,
+                    priority INTEGER NOT NULL DEFAULT 1,
+                    status TEXT DEFAULT 'disconnected',
+                    last_connected_at TIMESTAMPTZ,
+                    last_error TEXT,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                );
+
+                CREATE TABLE IF NOT EXISTS wa_account_groups (
+                    account_id TEXT NOT NULL REFERENCES wa_accounts(id) ON DELETE CASCADE,
+                    group_jid TEXT NOT NULL,
+                    group_name TEXT,
+                    synced_at TIMESTAMPTZ DEFAULT now(),
+                    PRIMARY KEY (account_id, group_jid)
+                );
+
+                CREATE TABLE IF NOT EXISTS send_log (
+                    id SERIAL PRIMARY KEY,
+                    account_id TEXT REFERENCES wa_accounts(id),
+                    target_jid TEXT NOT NULL,
+                    message_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'attempted',
+                    error TEXT,
+                    wa_message_id TEXT,
+                    created_at TIMESTAMPTZ DEFAULT now()
                 );
             `)
 

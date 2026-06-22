@@ -470,4 +470,133 @@ router.get('/api/me', (req, res) => {
     res.json({ username: req.session.username, isAdmin: req.session.isAdmin })
 })
 
+// --- API: WhatsApp Accounts (admin only) ---
+router.get('/api/accounts', async (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: 'Admin only' })
+    try {
+        const db = await getDb()
+        const accounts = await db.all('SELECT id, label, phone_number, priority, status, last_connected_at, last_error, created_at FROM wa_accounts ORDER BY priority ASC, created_at ASC')
+        res.json(accounts)
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+router.post('/api/accounts', async (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: 'Admin only' })
+    const { label, phoneNumber, priority } = req.body
+    if (!label) return res.status(400).json({ error: 'Label is required' })
+    try {
+        // Lazy-load connection manager (only available in worker/all mode)
+        let cm
+        try { cm = require('./connection-manager') } catch { cm = null }
+
+        const db = await getDb()
+        const crypto = require('crypto')
+        const id = crypto.randomUUID()
+        const effectivePriority = priority || ((await db.get('SELECT MAX(priority) as max_p FROM wa_accounts'))?.max_p || 0) + 1
+        const cleanPhone = phoneNumber ? phoneNumber.replace(/[^0-9]/g, '') : null
+
+        await db.run(
+            'INSERT INTO wa_accounts (id, label, phone_number, priority) VALUES (?, ?, ?, ?)',
+            id, label, cleanPhone, effectivePriority
+        )
+
+        // If connection manager is available (worker mode), connect immediately
+        if (cm) {
+            const account = await db.get('SELECT * FROM wa_accounts WHERE id = ?', id)
+            await cm.connectOne(account)
+        }
+
+        // Check if pairing code was generated
+        const pairingRow = await db.get("SELECT value FROM app_settings WHERE key = ?", `pairing_code_${id}`)
+        res.json({ success: true, id, label, priority: effectivePriority, pairingCode: pairingRow?.value || null })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+router.put('/api/accounts/:id/priority', async (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: 'Admin only' })
+    const { priority } = req.body
+    if (priority == null || priority < 1) return res.status(400).json({ error: 'Priority must be >= 1' })
+    try {
+        const db = await getDb()
+        await db.run('UPDATE wa_accounts SET priority = ? WHERE id = ?', priority, req.params.id)
+
+        // Update in-memory state if connection manager is loaded
+        try {
+            const cm = require('./connection-manager')
+            cm.updatePriority(req.params.id, priority)
+        } catch {}
+
+        res.json({ success: true })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+router.delete('/api/accounts/:id', async (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: 'Admin only' })
+    try {
+        // Use connection manager if available (handles socket disconnect + file cleanup)
+        try {
+            const cm = require('./connection-manager')
+            await cm.removeAccount(req.params.id)
+        } catch {
+            // Fallback: just delete from DB
+            const db = await getDb()
+            await db.run('DELETE FROM wa_accounts WHERE id = ?', req.params.id)
+        }
+        res.json({ success: true })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+router.post('/api/accounts/:id/reconnect', async (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: 'Admin only' })
+    try {
+        const cm = require('./connection-manager')
+        const db = await getDb()
+        const account = await db.get('SELECT * FROM wa_accounts WHERE id = ?', req.params.id)
+        if (!account) return res.status(404).json({ error: 'Account not found' })
+        await cm.disconnectOne(req.params.id)
+        await cm.connectOne(account)
+        res.json({ success: true, message: `Reconnecting "${account.label}"...` })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+router.get('/api/accounts/health', async (req, res) => {
+    try {
+        const db = await getDb()
+        const accounts = await db.all('SELECT id, label, priority, status, last_connected_at, last_error FROM wa_accounts ORDER BY priority ASC')
+        const total = accounts.length
+        const connected = accounts.filter(a => a.status === 'connected').length
+        const aggregate = total === 0 ? 'no_accounts' : connected === total ? 'connected' : connected > 0 ? 'degraded' : 'disconnected'
+        res.json({ aggregate, total, connected, accounts })
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
+// --- API: Send Log ---
+router.get('/api/send-log', async (req, res) => {
+    if (!req.session.isAdmin) return res.status(403).json({ error: 'Admin only' })
+    try {
+        const db = await getDb()
+        const logs = await db.all(`
+            SELECT sl.*, wa.label as account_label
+            FROM send_log sl
+            LEFT JOIN wa_accounts wa ON sl.account_id = wa.id
+            ORDER BY sl.created_at DESC LIMIT 100
+        `)
+        res.json(logs)
+    } catch (err) {
+        res.status(500).json({ error: err.message })
+    }
+})
+
 module.exports = router

@@ -85,6 +85,37 @@ async function createDb() {
                     created_at TEXT DEFAULT (datetime('now')),
                     processed_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS wa_accounts (
+                    id TEXT PRIMARY KEY,
+                    label TEXT NOT NULL,
+                    phone_number TEXT,
+                    priority INTEGER NOT NULL DEFAULT 1,
+                    status TEXT DEFAULT 'disconnected',
+                    last_connected_at TEXT,
+                    last_error TEXT,
+                    created_at TEXT DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS wa_account_groups (
+                    account_id TEXT NOT NULL REFERENCES wa_accounts(id) ON DELETE CASCADE,
+                    group_jid TEXT NOT NULL,
+                    group_name TEXT,
+                    synced_at TEXT DEFAULT (datetime('now')),
+                    PRIMARY KEY (account_id, group_jid)
+                );
+
+                CREATE TABLE IF NOT EXISTS send_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT,
+                    target_jid TEXT NOT NULL,
+                    message_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'attempted',
+                    error TEXT,
+                    wa_message_id TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    FOREIGN KEY (account_id) REFERENCES wa_accounts(id)
+                );
             `)
 
             const insert = raw.prepare('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)')
