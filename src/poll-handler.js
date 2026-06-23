@@ -11,26 +11,49 @@ const NO_OPTIONS = ['no puedo']
  */
 async function initPollTracking() {
     const db = await getDb()
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS active_polls (
-            poll_msg_id TEXT PRIMARY KEY,
-            poll_sender_jid TEXT NOT NULL,
-            group_jid TEXT NOT NULL,
-            service_date TEXT NOT NULL,
-            day_type TEXT NOT NULL CHECK(day_type IN ('thursday', 'sunday')),
-            created_at TEXT DEFAULT (datetime('now'))
-        );
+    if (db._type === 'postgres') {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS active_polls (
+                poll_msg_id TEXT PRIMARY KEY,
+                poll_sender_jid TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                service_date TEXT NOT NULL,
+                day_type TEXT NOT NULL CHECK(day_type IN ('thursday', 'sunday')),
+                created_at TIMESTAMPTZ DEFAULT now()
+            );
 
-        CREATE TABLE IF NOT EXISTS poll_responses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            poll_msg_id TEXT NOT NULL,
-            voter_jid TEXT NOT NULL,
-            selected_option TEXT NOT NULL,
-            processed INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT (datetime('now')),
-            UNIQUE(poll_msg_id, voter_jid)
-        );
-    `)
+            CREATE TABLE IF NOT EXISTS poll_responses (
+                id SERIAL PRIMARY KEY,
+                poll_msg_id TEXT NOT NULL,
+                voter_jid TEXT NOT NULL,
+                selected_option TEXT NOT NULL,
+                processed INTEGER DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(poll_msg_id, voter_jid)
+            );
+        `)
+    } else {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS active_polls (
+                poll_msg_id TEXT PRIMARY KEY,
+                poll_sender_jid TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                service_date TEXT NOT NULL,
+                day_type TEXT NOT NULL CHECK(day_type IN ('thursday', 'sunday')),
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS poll_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                poll_msg_id TEXT NOT NULL,
+                voter_jid TEXT NOT NULL,
+                selected_option TEXT NOT NULL,
+                processed INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(poll_msg_id, voter_jid)
+            );
+        `)
+    }
     console.log('[POLL-HANDLER] ✅ Poll tracking tables ready')
 }
 
