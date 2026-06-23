@@ -572,7 +572,7 @@ router.post('/api/accounts/:id/reconnect', async (req, res) => {
 router.get('/api/accounts/health', async (req, res) => {
     try {
         const db = await getDb()
-        const accounts = await db.all('SELECT id, label, priority, status, last_connected_at, last_error FROM wa_accounts ORDER BY priority ASC')
+        const accounts = await db.all('SELECT id, label, phone_number, priority, status, last_connected_at, last_error FROM wa_accounts ORDER BY priority ASC')
         const total = accounts.length
         const connected = accounts.filter(a => a.status === 'connected').length
         const aggregate = total === 0 ? 'no_accounts' : connected === total ? 'connected' : connected > 0 ? 'degraded' : 'disconnected'
