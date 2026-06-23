@@ -103,6 +103,7 @@ async function connectOne(account) {
             conn.status = 'connected'
             console.log(`[CONN-MGR] ✅ "${account.label}" connected (priority ${account.priority})`)
             await updateAccountStatus(account.id, 'connected')
+            await persistAggregateStatus()
             // Sync groups for this account
             setTimeout(() => syncAccountGroups(account.id, socket), 5000)
         }
@@ -113,6 +114,7 @@ async function connectOne(account) {
             const reason = lastDisconnect?.error?.message || 'unknown'
             console.log(`[CONN-MGR] ⚠️ "${account.label}" disconnected (code: ${statusCode}, reason: ${reason})`)
             await updateAccountStatus(account.id, 'disconnected', reason)
+            await persistAggregateStatus()
 
             if (statusCode !== DisconnectReason.loggedOut) {
                 const delay = statusCode === 408 || statusCode === 503 ? 15000 : 5000
@@ -309,6 +311,17 @@ async function updatePriority(accountId, newPriority) {
 }
 
 // --- Internal helpers ---
+
+async function persistAggregateStatus() {
+    try {
+        const db = await getDb()
+        const status = getAggregateStatus()
+        await db.run(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('bot_status', ?)",
+            status
+        )
+    } catch (e) { /* non-critical */ }
+}
 
 async function updateAccountStatus(accountId, status, error, pairingCode) {
     const db = await getDb()
