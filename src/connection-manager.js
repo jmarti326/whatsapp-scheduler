@@ -422,7 +422,7 @@ function attachPollListeners(handler) {
             for (const { key, update } of updates) {
                 if (update.pollUpdates && update.pollUpdates.length > 0) {
                     try {
-                        await handler(key, update.pollUpdates, accountId)
+                        await handler(key, update.pollUpdates, accountId, conn.socket)
                     } catch (err) {
                         console.error(`[CONN-MGR] ❌ Poll handler error on "${conn.label}":`, err.message)
                     }

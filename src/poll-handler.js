@@ -1,7 +1,44 @@
 const { getDb } = require('./db/index')
+const { jidDecode, isLidUser } = require('baileys')
 const { getAssignedMembers, getWeekDates } = require('./messages')
 
 const AUTO_FOOTER = '\n\n_🤖 Mensaje enviado automáticamente por IPR Team Scheduler AI Agent_'
+
+/**
+ * Normalize any WhatsApp JID to a bare phone number (digits only), matching the
+ * format stored in team_members.phone.
+ *
+ * In Baileys 7 / current WhatsApp, voter JIDs can arrive with a device suffix
+ * (e.g. "573001234567:12@s.whatsapp.net") or in LID form (e.g. "223456789@lid").
+ * A naive `.replace('@s.whatsapp.net', '')` leaves the device suffix (or the
+ * whole "@lid" domain) in place, so the phone never matches the DB and a member
+ * who already voted is wrongly treated as a non-responder.
+ */
+function jidToPhone(jid) {
+    if (!jid) return ''
+    const decoded = jidDecode(jid)
+    if (decoded && decoded.user) return decoded.user.replace(/[^0-9]/g, '')
+    // No '@' present — treat as a bare phone/user, strip any device suffix.
+    return String(jid).split(':')[0].replace(/[^0-9]/g, '')
+}
+
+/**
+ * Resolve a voter JID to a bare phone number, transparently mapping LID JIDs
+ * back to their phone number using the socket's LID mapping store when available.
+ */
+async function resolveVoterPhone(voterJid, socket) {
+    if (!voterJid) return ''
+    if (isLidUser(voterJid)) {
+        try {
+            const pnJid = await socket?.signalRepository?.lidMapping?.getPNForLID?.(voterJid)
+            if (pnJid) return jidToPhone(pnJid)
+            console.warn(`[POLL-HANDLER] ⚠️ No phone mapping found for LID ${voterJid}`)
+        } catch (err) {
+            console.error(`[POLL-HANDLER] ⚠️ Failed to resolve LID ${voterJid}:`, err.message)
+        }
+    }
+    return jidToPhone(voterJid)
+}
 
 // Poll options that indicate "No" (case-insensitive partial match)
 const NO_OPTIONS = ['no puedo']
@@ -76,7 +113,7 @@ async function trackPoll(msgKey, groupJid, serviceDate, dayType) {
  * Handle poll vote updates from Baileys messages.update event.
  * Called by bot.js when it detects pollUpdates.
  */
-async function handlePollVote(pollMsgKey, pollUpdates, sendTextMessage) {
+async function handlePollVote(pollMsgKey, pollUpdates, sendTextMessage, socket) {
     const db = await getDb()
     const pollMsgId = pollMsgKey.id
 
@@ -89,14 +126,19 @@ async function handlePollVote(pollMsgKey, pollUpdates, sendTextMessage) {
     if (!poll) return // Not one of our tracked polls
 
     for (const update of pollUpdates) {
-        const voterJid = update.pollUpdateMessageKey?.participant ||
+        const rawVoterJid = update.pollUpdateMessageKey?.participant ||
                          update.pollUpdateMessageKey?.remoteJid
-        if (!voterJid) continue
+        if (!rawVoterJid) continue
 
         const selectedOptions = update.vote?.selectedOptions || []
         if (selectedOptions.length === 0) continue
 
         const selectedText = selectedOptions[0] // Single-choice poll
+
+        // Normalize the voter JID to a bare phone number so it matches
+        // team_members.phone regardless of device suffix or LID form.
+        const voterPhone = await resolveVoterPhone(rawVoterJid, socket)
+        const voterJid = voterPhone ? `${voterPhone}@s.whatsapp.net` : rawVoterJid
         console.log(`[POLL-HANDLER] 🗳️ Vote received: ${voterJid} → "${selectedText}"`)
 
         // Store the response (upsert in case they change their vote)
@@ -123,8 +165,8 @@ async function handlePollVote(pollMsgKey, pollUpdates, sendTextMessage) {
 async function notifyBackup(poll, voterJid, sendTextMessage) {
     const db = await getDb()
 
-    // Extract phone from JID (e.g., "573001234567@s.whatsapp.net" → "573001234567")
-    const voterPhone = voterJid.replace('@s.whatsapp.net', '')
+    // Extract phone from JID (device-suffix / LID safe)
+    const voterPhone = jidToPhone(voterJid)
 
     // Verify this voter is a primary member for this service date
     const voterMember = await db.get(`
@@ -248,7 +290,7 @@ async function remindNonResponders(dayType, sendTextMessage) {
         poll.poll_msg_id
     )
     const respondedPhones = new Set(
-        responses.map(r => r.voter_jid.replace('@s.whatsapp.net', ''))
+        responses.map(r => jidToPhone(r.voter_jid))
     )
 
     // Find who hasn't responded

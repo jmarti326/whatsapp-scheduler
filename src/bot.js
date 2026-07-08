@@ -10,8 +10,8 @@ async function connectBot() {
     await connectionManager.connectAll()
 
     // Attach poll-vote listeners to all connected sockets
-    connectionManager.attachPollListeners(async (key, pollUpdates, accountId) => {
-        await handlePollVote(key, pollUpdates, sendTextMessage)
+    connectionManager.attachPollListeners(async (key, pollUpdates, accountId, socket) => {
+        await handlePollVote(key, pollUpdates, sendTextMessage, socket)
     })
 
     // Persist aggregate status for the API layer
