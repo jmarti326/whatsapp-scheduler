@@ -141,10 +141,17 @@ async function handlePollVote(pollMsgKey, pollUpdates, sendTextMessage, socket) 
         const voterJid = voterPhone ? `${voterPhone}@s.whatsapp.net` : rawVoterJid
         console.log(`[POLL-HANDLER] 🗳️ Vote received: ${voterJid} → "${selectedText}"`)
 
-        // Store the response (upsert in case they change their vote)
+        // Record (or update) the vote. Uses a portable UPSERT that works
+        // identically on SQLite and Postgres: a re-delivered poll update (Baileys
+        // can emit messages.update more than once) or a changed vote updates the
+        // stored option WITHOUT resetting `processed`, so a backup is never
+        // notified twice for the same primary. `processed` is only ever set to 1
+        // by notifyBackup once the backup has actually been contacted.
         await db.run(
-            `INSERT OR REPLACE INTO poll_responses (poll_msg_id, voter_jid, selected_option, processed)
-             VALUES (?, ?, ?, 0)`,
+            `INSERT INTO poll_responses (poll_msg_id, voter_jid, selected_option, processed)
+             VALUES (?, ?, ?, 0)
+             ON CONFLICT (poll_msg_id, voter_jid)
+             DO UPDATE SET selected_option = excluded.selected_option`,
             pollMsgId, voterJid, selectedText
         )
 
