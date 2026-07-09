@@ -12,6 +12,10 @@ on:
       - '.github/workflows/docker-publish.yml'
   workflow_dispatch:
 
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
