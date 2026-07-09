@@ -1,9 +1,26 @@
+# ---- Builder stage: compile native modules (e.g. better-sqlite3) ----
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+# Build toolchain for node-gyp so native modules compile reliably even when
+# no matching prebuilt binary is available for the target platform/libc.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# ---- Runtime stage: lean image without build tools ----
 FROM node:20-slim
 
 WORKDIR /app
 
+# Copy the already-compiled dependencies from the builder. Both stages share
+# the same base image and architecture, so native binaries are compatible.
+COPY --from=builder /app/node_modules ./node_modules
 COPY package*.json ./
-RUN npm ci --omit=dev
 
 COPY src/ ./src/
 COPY views/ ./views/
