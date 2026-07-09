@@ -341,4 +341,4 @@ async function remindNonResponders(dayType, sendTextMessage) {
     return { sent: true, count: sentCount, total: nonResponders.length, names: nonResponders.map(m => m.name) }
 }
 
-module.exports = { initPollTracking, trackPoll, handlePollVote, remindNonResponders }
+module.exports = { initPollTracking, trackPoll, handlePollVote, remindNonResponders, jidToPhone, resolveVoterPhone }
