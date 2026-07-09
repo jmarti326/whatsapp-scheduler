@@ -21,7 +21,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "express-session": "^1.19.0",
-    "node-cron": "^4.2.1",
+    "node-cron": "^4.6.0",
     "pg": "^8.21.0",
     "pino": "^10.3.1"
   },
