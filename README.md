@@ -62,6 +62,8 @@ On first run, update the **Group JID** in Settings (or directly in the database)
 | `ADMIN_USER` / `ADMIN_PASS` | — | Seed initial admin on first boot |
 | `DATABASE_URL` | — | Postgres connection string (Neon). Omit to use SQLite |
 | `APP_ROLE` | `all` | `all` · `api` (Vercel) · `worker` (Azure Container Apps) |
+| `PENDING_SENDS_POLL_MS` | `60000` | How often the worker polls the DB for queued sends from a separate frontend. Higher = less Postgres/Neon compute. Set to `0` to disable (safe when the API runs in the same process and sends directly) |
+| `GROUP_SYNC_MIN_INTERVAL_MS` | `3600000` | Minimum gap between WhatsApp group re-syncs per account. Prevents rewriting group rows on every reconnect (saves Neon compute) |
 
 ## Deployment
 
