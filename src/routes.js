@@ -285,7 +285,11 @@ router.post('/api/send', async (req, res) => {
         "INSERT INTO pending_sends (type, date, group_jid, force_send) VALUES (?, ?, ?, ?)",
         type, targetDate, groupJid || null, force ? 1 : 0
     )
-    res.json({ queued: true, type, date: targetDate, message: 'Message queued — worker will send it shortly' })
+    // Push-notify the worker to drain immediately (best-effort; falls back to the
+    // worker's optional safety-net poll if the trigger is unconfigured or fails).
+    const { fireDrainTrigger } = require('./trigger')
+    const trigger = await fireDrainTrigger()
+    res.json({ queued: true, type, date: targetDate, triggered: !!trigger.ok, message: 'Message queued — worker will send it shortly' })
 })
 
 // --- API: Personal DMs ---

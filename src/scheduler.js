@@ -162,21 +162,24 @@ function startScheduler() {
         }, 3000)
     }, { timezone: 'America/Puerto_Rico' })
 
-    // Poll for queued sends coming from a SEPARATE frontend (e.g. the Vercel
-    // portal). When the API runs in this same process it sends directly and
-    // never enqueues, so this poll only matters for split deployments.
+    // Queued sends come from a SEPARATE frontend (the Vercel portal), which has
+    // no WhatsApp connection and so writes a row to pending_sends. This worker
+    // drains that queue.
     //
-    // The interval is kept high on purpose: a frequent poll keeps the Postgres
-    // compute permanently awake and prevents Neon from scaling to zero, which
-    // burns the whole free-tier compute allowance. Configurable via
-    // PENDING_SENDS_POLL_MS; set it to 0 to disable the poll entirely on
-    // single-process (worker-only) deployments.
-    const pollMs = parseInt(process.env.PENDING_SENDS_POLL_MS ?? '60000', 10)
+    // Primary path is PUSH: the frontend calls POST /internal/drain right after
+    // enqueuing, so a "send now" fires immediately (see src/trigger + routes.js).
+    // Polling is therefore DISABLED by default — a frequent poll keeps the
+    // Postgres compute permanently awake and prevents Neon from scaling to zero.
+    //
+    // PENDING_SENDS_POLL_MS is an OPTIONAL safety net for a lost trigger call.
+    // Default 0 (off). Set e.g. 900000 (15 min) if you want missed webhooks to
+    // self-heal at the cost of waking the DB on that cadence.
+    const pollMs = parseInt(process.env.PENDING_SENDS_POLL_MS ?? '0', 10)
     if (pollMs > 0) {
         setInterval(processPendingSends, pollMs)
-        console.log(`[SCHEDULER] 📥 Queue poll every ${pollMs / 1000}s (set PENDING_SENDS_POLL_MS=0 to disable)`)
+        console.log(`[SCHEDULER] 📥 Queue safety-net poll every ${pollMs / 1000}s`)
     } else {
-        console.log('[SCHEDULER] 📥 Queue poll disabled (PENDING_SENDS_POLL_MS=0)')
+        console.log('[SCHEDULER] 📥 Queue poll disabled — using push trigger (POST /internal/drain)')
     }
     // Thursday 3:00 PM AST — Remind primaries who haven't responded to today's poll
     cron.schedule('0 15 * * 4', async () => {
@@ -195,7 +198,12 @@ function startScheduler() {
     console.log('[SCHEDULER] ⏰ Poll reminders at 3:00 PM AST (Thu & Sat) for non-responders')
 }
 
+let draining = false
 async function processPendingSends() {
+    // Prevent overlapping drains (a push trigger and the safety-net poll could
+    // otherwise fire concurrently and double-send a queued item).
+    if (draining) return
+    draining = true
     try {
         const db = await getDb()
         const pending = await db.all(
@@ -223,8 +231,10 @@ async function processPendingSends() {
             console.log(`[QUEUE] Processed: ${item.type} → ${result.sent ? 'sent' : result.error || 'skipped'}`)
         }
     } catch (e) {
-        // Non-critical — will retry next interval
+        // Non-critical — will retry on next trigger/poll
+    } finally {
+        draining = false
     }
 }
 
-module.exports = { startScheduler, sendScheduledMessage, sendPersonalDMs, getToday, getGroupJid }
+module.exports = { startScheduler, sendScheduledMessage, sendPersonalDMs, getToday, getGroupJid, processPendingSends }

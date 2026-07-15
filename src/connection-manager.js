@@ -132,8 +132,7 @@ async function connectOne(account) {
         if (connection === 'open') {
             conn.status = 'connected'
             console.log(`[CONN-MGR] ✅ "${account.label}" connected (priority ${account.priority})`)
-            await updateAccountStatus(account.id, 'connected')
-            await persistAggregateStatus()
+            scheduleStatusWrite(account.id, 'connected')
             // Sync groups for this account, but not on every reconnect — group
             // membership rarely changes, and rewriting ~100 rows on each of the
             // frequent WhatsApp reconnects keeps Postgres (Neon) needlessly busy.
@@ -145,8 +144,7 @@ async function connectOne(account) {
             const statusCode = lastDisconnect?.error?.output?.statusCode
             const reason = lastDisconnect?.error?.message || 'unknown'
             console.log(`[CONN-MGR] ⚠️ "${account.label}" disconnected (code: ${statusCode}, reason: ${reason})`)
-            await updateAccountStatus(account.id, 'disconnected', reason)
-            await persistAggregateStatus()
+            scheduleStatusWrite(account.id, 'disconnected', reason)
 
             if (statusCode !== DisconnectReason.loggedOut) {
                 const delay = statusCode === 408 || statusCode === 503 ? 15000 : 5000
@@ -154,7 +152,7 @@ async function connectOne(account) {
                 setTimeout(() => connectOne(account), delay)
             } else {
                 conn.status = 'logged_out'
-                await updateAccountStatus(account.id, 'logged_out', reason)
+                scheduleStatusWrite(account.id, 'logged_out', reason)
             }
         }
     })
@@ -358,6 +356,32 @@ async function persistAggregateStatus() {
         )
         lastPersistedStatus = status
     } catch (e) { /* non-critical */ }
+}
+
+// Debounced/coalesced status persistence. WhatsApp drops idle sockets often
+// (code 428 ~every 30 min), and each disconnect→reconnect flap would otherwise
+// write to Postgres twice. We update in-memory conn.status immediately (so
+// sending is never delayed) but delay the DB write, collapsing rapid flaps into
+// a single write of the final state.
+const STATUS_WRITE_DEBOUNCE_MS = parseInt(process.env.STATUS_WRITE_DEBOUNCE_MS ?? '20000', 10)
+const statusWriteTimers = new Map()   // accountId → timer
+const statusWriteDesired = new Map()  // accountId → { status, error }
+
+function scheduleStatusWrite(accountId, status, error) {
+    statusWriteDesired.set(accountId, { status, error })
+    if (statusWriteTimers.has(accountId)) return // a write is already scheduled; it will pick up the latest desired state
+    const timer = setTimeout(async () => {
+        statusWriteTimers.delete(accountId)
+        const desired = statusWriteDesired.get(accountId)
+        statusWriteDesired.delete(accountId)
+        if (!desired) return
+        try {
+            await updateAccountStatus(accountId, desired.status, desired.error)
+        } catch { /* non-critical */ }
+        await persistAggregateStatus()
+    }, STATUS_WRITE_DEBOUNCE_MS)
+    if (timer.unref) timer.unref()
+    statusWriteTimers.set(accountId, timer)
 }
 
 async function updateAccountStatus(accountId, status, error, pairingCode) {
