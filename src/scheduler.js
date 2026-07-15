@@ -162,9 +162,22 @@ function startScheduler() {
         }, 3000)
     }, { timezone: 'America/Puerto_Rico' })
 
-    // Poll for queued sends from the API every 10 seconds
-    setInterval(processPendingSends, 10000)
-
+    // Poll for queued sends coming from a SEPARATE frontend (e.g. the Vercel
+    // portal). When the API runs in this same process it sends directly and
+    // never enqueues, so this poll only matters for split deployments.
+    //
+    // The interval is kept high on purpose: a frequent poll keeps the Postgres
+    // compute permanently awake and prevents Neon from scaling to zero, which
+    // burns the whole free-tier compute allowance. Configurable via
+    // PENDING_SENDS_POLL_MS; set it to 0 to disable the poll entirely on
+    // single-process (worker-only) deployments.
+    const pollMs = parseInt(process.env.PENDING_SENDS_POLL_MS ?? '60000', 10)
+    if (pollMs > 0) {
+        setInterval(processPendingSends, pollMs)
+        console.log(`[SCHEDULER] 📥 Queue poll every ${pollMs / 1000}s (set PENDING_SENDS_POLL_MS=0 to disable)`)
+    } else {
+        console.log('[SCHEDULER] 📥 Queue poll disabled (PENDING_SENDS_POLL_MS=0)')
+    }
     // Thursday 3:00 PM AST — Remind primaries who haven't responded to today's poll
     cron.schedule('0 15 * * 4', async () => {
         console.log('[CRON] Thursday poll reminder triggered')

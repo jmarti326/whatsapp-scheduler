@@ -134,7 +134,9 @@ async function connectOne(account) {
             console.log(`[CONN-MGR] ✅ "${account.label}" connected (priority ${account.priority})`)
             await updateAccountStatus(account.id, 'connected')
             await persistAggregateStatus()
-            // Sync groups for this account
+            // Sync groups for this account, but not on every reconnect — group
+            // membership rarely changes, and rewriting ~100 rows on each of the
+            // frequent WhatsApp reconnects keeps Postgres (Neon) needlessly busy.
             setTimeout(() => syncAccountGroups(account.id, socket), 5000)
         }
 
@@ -342,14 +344,19 @@ async function updatePriority(accountId, newPriority) {
 
 // --- Internal helpers ---
 
+let lastPersistedStatus = null
 async function persistAggregateStatus() {
     try {
-        const db = await getDb()
         const status = getAggregateStatus()
+        // Skip redundant writes. Reconnect churn (WhatsApp closes idle sockets
+        // frequently) would otherwise hammer Postgres and keep Neon awake.
+        if (status === lastPersistedStatus) return
+        const db = await getDb()
         await db.run(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('bot_status', ?)",
             status
         )
+        lastPersistedStatus = status
     } catch (e) { /* non-critical */ }
 }
 
@@ -378,7 +385,17 @@ async function updateAccountStatus(accountId, status, error, pairingCode) {
     }
 }
 
+const lastGroupSync = new Map() // accountId → epoch ms of last successful sync
+const GROUP_SYNC_MIN_INTERVAL_MS = parseInt(process.env.GROUP_SYNC_MIN_INTERVAL_MS ?? '3600000', 10) // 1h
+
 async function syncAccountGroups(accountId, socket) {
+    // Throttle: skip if we synced this account recently. Group membership is
+    // effectively static, so re-fetching + rewriting ~100 rows on every
+    // reconnect is pure wasted Postgres compute.
+    const last = lastGroupSync.get(accountId) || 0
+    if (Date.now() - last < GROUP_SYNC_MIN_INTERVAL_MS) {
+        return
+    }
     try {
         const groups = await socket.groupFetchAllParticipating()
         const db = await getDb()
@@ -402,6 +419,7 @@ async function syncAccountGroups(accountId, socket) {
         )
 
         console.log(`[CONN-MGR] 📋 Synced ${list.length} groups for account ${accountId}`)
+        lastGroupSync.set(accountId, Date.now())
     } catch (e) {
         console.error(`[CONN-MGR] Failed to sync groups for ${accountId}:`, e.message)
     }
