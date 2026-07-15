@@ -11,6 +11,31 @@ const AUTH_BASE = path.join(__dirname, '..', 'data', 'auth_info')
 // In-memory state per account
 const connections = new Map() // accountId → { socket, status, priority, label }
 
+// Poll-vote handler, registered once via attachPollListeners. Stored at module
+// scope so it can be (re)wired onto every new socket — including the fresh
+// sockets created on reconnect — not just the ones that existed at startup.
+let pollHandler = null
+
+/**
+ * Wire the registered poll-vote handler onto a single socket's messages.update
+ * stream. Safe to call for every socket we create; does nothing until a handler
+ * has been registered via attachPollListeners.
+ */
+function wirePollListener(accountId, socket, label) {
+    if (!pollHandler) return
+    socket.ev.on('messages.update', async (updates) => {
+        for (const { key, update } of updates) {
+            if (update.pollUpdates && update.pollUpdates.length > 0) {
+                try {
+                    await pollHandler(key, update.pollUpdates, accountId, socket)
+                } catch (err) {
+                    console.error(`[CONN-MGR] ❌ Poll handler error on "${label}":`, err.message)
+                }
+            }
+        }
+    })
+}
+
 /**
  * Pre-send failure types that are safe to failover (message was NOT delivered)
  */
@@ -79,6 +104,11 @@ async function connectOne(account) {
         label: account.label,
         accountId: account.id,
     })
+
+    // Attach the poll-vote listener to THIS socket. Reconnects create a brand-new
+    // socket, so wiring here (rather than only once at startup) guarantees votes
+    // keep being captured after every reconnect.
+    wirePollListener(account.id, socket, account.label)
 
     if (needsPairing) {
         setTimeout(async () => {
@@ -413,22 +443,14 @@ async function autoMigrateLegacyAuth(db) {
 }
 
 /**
- * Attach poll-vote listeners to all connected sockets.
- * Called after connections are established.
+ * Register the poll-vote handler and wire it onto all currently connected
+ * sockets. The handler is also stored at module scope so connectOne can wire it
+ * onto every socket created afterwards (including reconnect sockets).
  */
 function attachPollListeners(handler) {
+    pollHandler = handler
     for (const [accountId, conn] of connections) {
-        conn.socket.ev.on('messages.update', async (updates) => {
-            for (const { key, update } of updates) {
-                if (update.pollUpdates && update.pollUpdates.length > 0) {
-                    try {
-                        await handler(key, update.pollUpdates, accountId, conn.socket)
-                    } catch (err) {
-                        console.error(`[CONN-MGR] ❌ Poll handler error on "${conn.label}":`, err.message)
-                    }
-                }
-            }
-        })
+        wirePollListener(accountId, conn.socket, conn.label)
     }
 }
 
