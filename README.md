@@ -62,8 +62,34 @@ On first run, update the **Group JID** in Settings (or directly in the database)
 | `ADMIN_USER` / `ADMIN_PASS` | — | Seed initial admin on first boot |
 | `DATABASE_URL` | — | Postgres connection string (Neon). Omit to use SQLite |
 | `APP_ROLE` | `all` | `all` · `api` (Vercel) · `worker` (Azure Container Apps) |
-| `PENDING_SENDS_POLL_MS` | `60000` | How often the worker polls the DB for queued sends from a separate frontend. Higher = less Postgres/Neon compute. Set to `0` to disable (safe when the API runs in the same process and sends directly) |
+| `WORKER_TRIGGER_SECRET` | — | Shared bearer secret protecting the worker's `POST /internal/drain` endpoint. Set the **same** value on the worker and the frontend |
+| `WORKER_TRIGGER_URL` | — | *(frontend only)* Public base URL of the worker, e.g. `https://team-scheduler-worker.<region>.azurecontainerapps.io`. The frontend calls it to push queued sends on demand |
+| `PENDING_SENDS_POLL_MS` | `0` | Optional safety-net poll for queued sends. `0` = disabled (pure push). Set e.g. `900000` (15 min) so a missed trigger self-heals, at the cost of waking the DB on that cadence |
 | `GROUP_SYNC_MIN_INTERVAL_MS` | `3600000` | Minimum gap between WhatsApp group re-syncs per account. Prevents rewriting group rows on every reconnect (saves Neon compute) |
+| `STATUS_WRITE_DEBOUNCE_MS` | `20000` | Debounce window for persisting connection status. Collapses transient reconnect flaps into a single DB write |
+
+### How queued "send now" works (and why the DB stays cheap)
+
+The scheduled **8:00 AM / 3:00 PM** messages are fired by in-process `cron` inside
+the worker and never touch the database queue — their reliability is independent
+of any polling.
+
+The `pending_sends` queue exists only because the **portal runs on Vercel**
+(`APP_ROLE=api`), which has no WhatsApp connection. When you click "send now":
+
+1. The Vercel API inserts a row into `pending_sends`.
+2. It immediately calls `POST /internal/drain` on the **worker** (Azure,
+   `APP_ROLE=worker`), authenticated with `WORKER_TRIGGER_SECRET`.
+3. The worker drains the queue and sends via WhatsApp — within seconds.
+
+Because this is **push, not poll**, the worker does not query Postgres on a timer,
+so Neon can scale to zero between real events. This is what keeps the project
+inside (or near) the Neon free-tier compute allowance. `PENDING_SENDS_POLL_MS`
+is only an optional fallback for a dropped trigger call.
+
+> The worker Container App must have **external ingress enabled** on its `PORT`
+> so Vercel can reach `/internal/drain`. The endpoint only accepts authenticated
+> requests and only triggers a queue drain.
 
 ## Deployment
 
@@ -80,6 +106,7 @@ Go to **Settings → Secrets and variables → Actions** in your repo and add:
 | `AZURE_CONTAINER_APP` | Worker deploy | Container App name from Bicep output (e.g. `whatsapp-scheduler-worker`) |
 | `DATABASE_URL` | Worker deploy + Migration | Neon pooler connection string |
 | `SESSION_SECRET` | Worker deploy | `openssl rand -hex 32` |
+| `WORKER_TRIGGER_SECRET` | Worker deploy + Vercel | `openssl rand -hex 32` — same value on both sides |
 | `VERCEL_TOKEN` | Vercel deploy | [vercel.com/account/tokens](https://vercel.com/account/tokens) |
 | `VERCEL_ORG_ID` | Vercel deploy | Vercel dashboard → Settings → General → "Your ID" |
 | `VERCEL_PROJECT_ID` | Vercel deploy | `prj_ImS8xzjL714BVTPq5mTDf4w0eQGq` (visible in project settings) |
@@ -93,6 +120,8 @@ In **Vercel → Project Settings → Environment Variables**, add:
 |----------|-------|
 | `DATABASE_URL` | Neon pooler connection string |
 | `SESSION_SECRET` | Same random secret as above |
+| `WORKER_TRIGGER_URL` | Public URL of the Azure worker (e.g. `https://team-scheduler-worker.<region>.azurecontainerapps.io`) |
+| `WORKER_TRIGGER_SECRET` | Same value set on the worker |
 
 `APP_ROLE=api` is already baked into `vercel.json`.
 

@@ -48,7 +48,10 @@ async function start() {
     }
 
     if (!IS_API) {
-        console.log(`[APP] Running as worker (APP_ROLE=${APP_ROLE}) — no HTTP server`)
+        // Pure worker: start a minimal HTTP server so the frontend can push
+        // on-demand queue drains (POST /internal/drain) and health checks.
+        require('./trigger').startWorkerServer()
+        console.log(`[APP] Running as worker (APP_ROLE=${APP_ROLE}) — trigger server only, no portal`)
         return
     }
 

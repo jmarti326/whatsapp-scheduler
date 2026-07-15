@@ -111,6 +111,23 @@ jobs:
                 "database-url=${{ secrets.DATABASE_URL }}" \
                 "session-secret=${{ secrets.SESSION_SECRET }}"
 
+            # Configure the on-demand queue trigger (push instead of DB polling).
+            if [ -n "${{ secrets.WORKER_TRIGGER_SECRET }}" ]; then
+              az containerapp secret set \
+                --name "${{ secrets.AZURE_CONTAINER_APP }}" \
+                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                --secrets "worker-trigger-secret=${{ secrets.WORKER_TRIGGER_SECRET }}"
+              az containerapp update \
+                --name "${{ secrets.AZURE_CONTAINER_APP }}" \
+                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                --set-env-vars "WORKER_TRIGGER_SECRET=secretref:worker-trigger-secret"
+              # Expose the worker so the Vercel frontend can call POST /internal/drain.
+              az containerapp ingress enable \
+                --name "${{ secrets.AZURE_CONTAINER_APP }}" \
+                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                --type external --target-port 3000 --transport auto 2>/dev/null || true
+            fi
+
             # Set WHATSAPP_PHONE env var if secret exists
             if [ -n "${{ secrets.WHATSAPP_PHONE }}" ]; then
               az containerapp update \
