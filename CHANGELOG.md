@@ -18,6 +18,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/). Dates ar
 ### Added
 - **`GROUP_ALLOWLIST` env var to restrict which WhatsApp groups are tracked (#31).** Previously every participating group (~100, including personal chats) was written to `wa_account_groups` / `groups_cache` and surfaced in the portal's group picker. Setting `GROUP_ALLOWLIST` to a comma-separated list of group names and/or JIDs now scopes persistence to just those groups. Unset/empty preserves the original "track all" behavior (backward compatible). Matching is normalized (case-insensitive, whitespace-collapsed, dash-variant-tolerant) so minor differences in WhatsApp subjects still match; allowlist entries that match zero groups are logged as a warning. Pure helpers live in `src/group-filter.js` with unit tests in `test/group-filter.test.js`; applied in `syncAccountGroups` (`src/connection-manager.js`). Production worker set to `Audio Visual - IPR,Test Group Chat`.
 
+### Fixed
+- **Group sync no longer wipes the cache on a transient empty fetch.** `syncAccountGroups` does `DELETE` then re-`INSERT`; during a reconnect flap `groupFetchAllParticipating()` can briefly return zero groups, which used to blank `wa_account_groups` / `groups_cache` until the next sync (up to an hour later, given `GROUP_SYNC_MIN_INTERVAL_MS`). Now an empty fetch is skipped and existing rows are kept.
+
 ---
 
 This day fixed the long-standing "false 3 PM reminder" bug at its true root and cut database cost dramatically.

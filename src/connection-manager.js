@@ -425,12 +425,22 @@ async function syncAccountGroups(accountId, socket) {
     }
     try {
         const groups = await socket.groupFetchAllParticipating()
+        const allParticipating = Object.values(groups)
+
+        // Guard: a transient reconnect can make groupFetchAllParticipating()
+        // return zero groups. Skip the sync entirely in that case — otherwise
+        // the DELETE below would wipe the persisted groups (and groups_cache the
+        // portal reads) until the next successful sync an hour later.
+        if (allParticipating.length === 0) {
+            console.warn(`[CONN-MGR] ⚠️ groupFetchAllParticipating returned 0 groups for ${accountId} — skipping sync (kept existing rows)`)
+            return
+        }
+
         const db = await getDb()
 
         // Clear old entries for this account
         await db.run('DELETE FROM wa_account_groups WHERE account_id = ?', accountId)
 
-        const allParticipating = Object.values(groups)
         const list = filterAllowedGroups(allParticipating, GROUP_ALLOWLIST)
         for (const g of list) {
             await db.run(
