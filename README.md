@@ -66,6 +66,7 @@ On first run, update the **Group JID** in Settings (or directly in the database)
 | `WORKER_TRIGGER_URL` | — | *(frontend only)* Public base URL of the worker, e.g. `https://team-scheduler-worker.<region>.azurecontainerapps.io`. The frontend calls it to push queued sends on demand |
 | `PENDING_SENDS_POLL_MS` | `0` | Optional safety-net poll for queued sends. `0` = disabled (pure push). Set e.g. `900000` (15 min) so a missed trigger self-heals, at the cost of waking the DB on that cadence |
 | `GROUP_SYNC_MIN_INTERVAL_MS` | `3600000` | Minimum gap between WhatsApp group re-syncs per account. Prevents rewriting group rows on every reconnect (saves Neon compute) |
+| `GROUP_ALLOWLIST` | — | Comma-separated group **names and/or JIDs** to track. Unset/empty = track all participating groups (original behavior). Matching is case-insensitive and tolerant of extra whitespace and dash variants (`–`/`—` → `-`). Only matched groups are written to `wa_account_groups` / `groups_cache`, so the portal's group picker is scoped to these. Example: `Audio Visual - IPR,Test Group Chat` |
 | `STATUS_WRITE_DEBOUNCE_MS` | `20000` | Debounce window for persisting connection status. Collapses transient reconnect flaps into a single DB write |
 
 ### How queued "send now" works (and why the DB stays cheap)

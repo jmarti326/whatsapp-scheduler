@@ -4,6 +4,7 @@ const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
 const { getDb } = require('./db/index')
+const { parseGroupAllowlist, filterAllowedGroups, unmatchedAllowlistEntries } = require('./group-filter')
 
 const logger = pino({ level: 'silent' })
 const AUTH_BASE = path.join(__dirname, '..', 'data', 'auth_info')
@@ -412,6 +413,8 @@ async function updateAccountStatus(accountId, status, error, pairingCode) {
 const lastGroupSync = new Map() // accountId → epoch ms of last successful sync
 const GROUP_SYNC_MIN_INTERVAL_MS = parseInt(process.env.GROUP_SYNC_MIN_INTERVAL_MS ?? '3600000', 10) // 1h
 
+const GROUP_ALLOWLIST = parseGroupAllowlist(process.env.GROUP_ALLOWLIST)
+
 async function syncAccountGroups(accountId, socket) {
     // Throttle: skip if we synced this account recently. Group membership is
     // effectively static, so re-fetching + rewriting ~100 rows on every
@@ -427,7 +430,8 @@ async function syncAccountGroups(accountId, socket) {
         // Clear old entries for this account
         await db.run('DELETE FROM wa_account_groups WHERE account_id = ?', accountId)
 
-        const list = Object.values(groups)
+        const allParticipating = Object.values(groups)
+        const list = filterAllowedGroups(allParticipating, GROUP_ALLOWLIST)
         for (const g of list) {
             await db.run(
                 'INSERT INTO wa_account_groups (account_id, group_jid, group_name) VALUES (?, ?, ?)',
@@ -442,7 +446,15 @@ async function syncAccountGroups(accountId, socket) {
             JSON.stringify(allGroups)
         )
 
-        console.log(`[CONN-MGR] 📋 Synced ${list.length} groups for account ${accountId}`)
+        if (GROUP_ALLOWLIST) {
+            console.log(`[CONN-MGR] 📋 Synced ${list.length} of ${allParticipating.length} participating groups for account ${accountId} (allowlist active)`)
+            const missing = unmatchedAllowlistEntries(allParticipating, GROUP_ALLOWLIST)
+            if (missing.length > 0) {
+                console.warn(`[CONN-MGR] ⚠️ GROUP_ALLOWLIST entries matched no group: ${missing.join(', ')}`)
+            }
+        } else {
+            console.log(`[CONN-MGR] 📋 Synced ${list.length} groups for account ${accountId}`)
+        }
         lastGroupSync.set(accountId, Date.now())
     } catch (e) {
         console.error(`[CONN-MGR] Failed to sync groups for ${accountId}:`, e.message)
@@ -517,4 +529,7 @@ module.exports = {
     updatePriority,
     attachPollListeners,
     getAllConnections,
+    filterAllowedGroups,
+    normalizeGroupKey: require('./group-filter').normalizeGroupKey,
+    parseGroupAllowlist,
 }
