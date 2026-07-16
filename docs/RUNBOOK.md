@@ -101,6 +101,26 @@ disconnected (code: 515, reason: Stream Errored (restart required))   ← pairin
 
 ---
 
+## 5. Scoping which groups are tracked (`GROUP_ALLOWLIST`)
+
+**Goal.** Only track specific groups (e.g. `Audio Visual - IPR`, `Test Group Chat`) instead of all ~100 participating chats, so the portal's group picker stays clean.
+
+**Set it.**
+```powershell
+az containerapp update -n team-scheduler-worker -g rg-ipr-church-scheduler `
+  --set-env-vars 'GROUP_ALLOWLIST=Audio Visual - IPR,Test Group Chat'
+```
+
+**Verify.** After the new revision starts, the next group sync logs:
+```
+[CONN-MGR] 📋 Synced 2 of N participating groups for account <id> (allowlist active)
+```
+If an entry matched nothing you'll see `⚠️ GROUP_ALLOWLIST entries matched no group: <entry>` — the WhatsApp subject differs; copy the exact name from the sync (or `SELECT group_name FROM wa_account_groups`) and update the env var. Matching is case-insensitive and tolerant of extra whitespace and dash variants, so only real wording differences need fixing.
+
+**Notes.** Group sync is throttled by `GROUP_SYNC_MIN_INTERVAL_MS` (default 1h), so a changed allowlist may take up to an hour to re-sync unless the worker reconnects. Unset/empty `GROUP_ALLOWLIST` reverts to tracking all groups. Scheduled sends are unaffected — they target a specific `group_jid` from `app_settings`, not the cache.
+
+---
+
 ## Useful commands
 
 ```powershell
