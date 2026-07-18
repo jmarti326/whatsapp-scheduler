@@ -1,6 +1,6 @@
 const cron = require('node-cron')
 const { getDb } = require('./db/index')
-const { sendTextMessage, sendPoll, getStatus } = require('./bot')
+const { sendTextMessage, sendPoll, getStatus, getSocket } = require('./bot')
 const { buildMondaySummary, buildWednesdayReminder, buildThursdayPoll, buildSaturdayReminder, buildSaturdayPoll, buildPersonalNotifications, getWeekDates } = require('./messages')
 const { initPollTracking, trackPoll, remindNonResponders } = require('./poll-handler')
 
@@ -184,13 +184,13 @@ function startScheduler() {
     // Thursday 3:00 PM AST — Remind primaries who haven't responded to today's poll
     cron.schedule('0 15 * * 4', async () => {
         console.log('[CRON] Thursday poll reminder triggered')
-        await remindNonResponders('thursday', sendTextMessage)
+        await remindNonResponders('thursday', sendTextMessage, getSocket())
     }, { timezone: 'America/Puerto_Rico' })
 
     // Saturday 3:00 PM AST — Remind primaries who haven't responded to Sunday poll
     cron.schedule('0 15 * * 6', async () => {
         console.log('[CRON] Saturday poll reminder triggered')
-        await remindNonResponders('sunday', sendTextMessage)
+        await remindNonResponders('sunday', sendTextMessage, getSocket())
     }, { timezone: 'America/Puerto_Rico' })
 
     console.log('[SCHEDULER] ✅ Cron jobs started (Mon/Wed/Thu/Sat at 8:00 AM AST)')
