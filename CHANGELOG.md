@@ -13,6 +13,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/). Dates ar
 
 ---
 
+## 2026-07-18 — False 3 PM reminders (round 2): unmapped LID voters
+
+### Fixed
+- **Members who voted still got the "you haven't answered" reminder — unmapped LID voters were recorded as non-phones.** In Baileys 7, group poll voters arrive as **LID** JIDs (`<id>@lid`). `resolveVoterPhone` maps a LID to a phone with `getPNForLID`, which only reads a **local reverse cache** — for a member who votes but rarely chats, that mapping is often never learned, so the lookup returns `null`. The code then stored the **LID user digits masquerading as a phone** (`<lidDigits>@s.whatsapp.net`), which never matches `team_members.phone`, so `remindNonResponders` treated the voter as silent. Fixes (`src/poll-handler.js`):
+  - `resolveVoterPhone` now returns `''` (not the LID digits) when a LID can't be mapped, and `handlePollVote` keeps the **raw `@lid` JID** in `poll_responses` instead of a fake phone.
+  - New `resolvePhoneToLidUser` uses `getLIDForPN` (which can actively USync-resolve) to map each assigned member's phone → LID; `remindNonResponders` now matches responders by phone **and** by LID (`memberRespondedViaLid`), so a vote stored under an unmapped LID is still counted.
+  - `notifyBackup` gained the same LID-aware matching so a "No puedo" from a LID-only member still triggers backup outreach; the reminder cron now passes the socket (`getSocket()` in `src/scheduler.js`).
+  - Regression coverage in `test/poll-handler.test.js` for the new empty-on-unmapped-LID contract and the phone↔LID matching helpers.
+
+---
+
 ## 2026-07-16 — Scope group tracking to an allowlist
 
 ### Added

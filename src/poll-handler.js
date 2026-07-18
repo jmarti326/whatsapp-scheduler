@@ -36,8 +36,47 @@ async function resolveVoterPhone(voterJid, socket) {
         } catch (err) {
             console.error(`[POLL-HANDLER] ⚠️ Failed to resolve LID ${voterJid}:`, err.message)
         }
+        // Could NOT map this LID to a phone. Return '' rather than the LID user
+        // digits: those are an internal WhatsApp id, not a phone number, and
+        // would never match team_members.phone — masquerading them as a phone is
+        // exactly what caused voters to be wrongly reminded that they hadn't
+        // answered. The caller keeps the raw "@lid" JID instead, so the vote can
+        // still be matched to a member later via a phone→LID lookup
+        // (see resolvePhoneToLidUser / memberRespondedViaLid).
+        return ''
     }
     return jidToPhone(voterJid)
+}
+
+/**
+ * Resolve a team member's stored phone number to their LID *user* digits (the
+ * bare id before "@lid", device suffix stripped), using the socket's LID mapping
+ * store. Unlike getPNForLID (reverse lookup, local cache only), getLIDForPN can
+ * actively resolve the mapping via USync, so this reliably yields a LID even for
+ * members we've never received a reverse mapping for.
+ *
+ * Returns '' when no socket/mapping is available or the lookup fails.
+ */
+async function resolvePhoneToLidUser(phone, socket) {
+    if (!phone) return ''
+    try {
+        const lidJid = await socket?.signalRepository?.lidMapping?.getLIDForPN?.(`${phone}@s.whatsapp.net`)
+        if (lidJid) return jidToPhone(lidJid)
+    } catch (err) {
+        console.error(`[POLL-HANDLER] ⚠️ Failed to resolve LID for phone ${phone}:`, err.message)
+    }
+    return ''
+}
+
+/**
+ * Decide whether a member (identified by phone) responded to a poll whose votes
+ * were recorded under an unmapped LID. Resolves the member's phone→LID and
+ * checks it against the set of LID-user digits collected from stored responses.
+ */
+async function memberRespondedViaLid(phone, respondedLidUsers, socket) {
+    if (!respondedLidUsers || respondedLidUsers.size === 0) return false
+    const lidUser = await resolvePhoneToLidUser(phone, socket)
+    return !!lidUser && respondedLidUsers.has(lidUser)
 }
 
 // Poll options that indicate "No" (case-insensitive partial match)
@@ -161,7 +200,7 @@ async function handlePollVote(pollMsgKey, pollUpdates, sendTextMessage, socket) 
         )
 
         if (isNoVote) {
-            await notifyBackup(poll, voterJid, sendTextMessage)
+            await notifyBackup(poll, voterJid, sendTextMessage, socket)
         }
     }
 }
@@ -169,19 +208,40 @@ async function handlePollVote(pollMsgKey, pollUpdates, sendTextMessage, socket) 
 /**
  * Notify backup members when a primary votes "No"
  */
-async function notifyBackup(poll, voterJid, sendTextMessage) {
+async function notifyBackup(poll, voterJid, sendTextMessage, socket) {
     const db = await getDb()
 
     // Extract phone from JID (device-suffix / LID safe)
     const voterPhone = jidToPhone(voterJid)
 
     // Verify this voter is a primary member for this service date
-    const voterMember = await db.get(`
+    let voterMember = await db.get(`
         SELECT tm.id, tm.name, tm.phone, se.role
         FROM team_members tm
         JOIN schedule_entries se ON se.member_id = tm.id
         WHERE tm.phone = ? AND se.service_date = ? AND se.day_type = ? AND se.role = 'primary'
     `, voterPhone, poll.service_date, poll.day_type)
+
+    // If the vote arrived as an unmapped LID, voterPhone holds LID digits which
+    // never match tm.phone. Resolve each assigned primary's LID and match it
+    // against the voter's LID, so a "No puedo" from a LID-only member still
+    // triggers backup outreach.
+    if (!voterMember && isLidUser(voterJid)) {
+        const voterLidUser = jidToPhone(voterJid)
+        const primaries = await db.all(`
+            SELECT tm.id, tm.name, tm.phone, se.role
+            FROM team_members tm
+            JOIN schedule_entries se ON se.member_id = tm.id
+            WHERE se.service_date = ? AND se.day_type = ? AND se.role = 'primary'
+        `, poll.service_date, poll.day_type)
+        for (const p of primaries) {
+            const pLidUser = await resolvePhoneToLidUser(p.phone, socket)
+            if (pLidUser && pLidUser === voterLidUser) {
+                voterMember = p
+                break
+            }
+        }
+    }
 
     if (!voterMember) {
         console.log(`[POLL-HANDLER] ℹ️ Voter ${voterPhone} is not a primary for this date, ignoring`)
@@ -263,7 +323,7 @@ async function notifyBackup(poll, voterJid, sendTextMessage) {
  * Send a follow-up DM to primaries who haven't responded to today's poll.
  * Called by cron at 3:00 PM AST on Thu and Sat.
  */
-async function remindNonResponders(dayType, sendTextMessage) {
+async function remindNonResponders(dayType, sendTextMessage, socket) {
     const db = await getDb()
 
     // Find today's poll for this day type
@@ -291,17 +351,32 @@ async function remindNonResponders(dayType, sendTextMessage) {
         return { skipped: true, reason: 'no_primaries' }
     }
 
-    // Get who already responded
+    // Get who already responded. Votes can be recorded either under a resolved
+    // phone JID ("<phone>@s.whatsapp.net") or, when the LID→phone mapping wasn't
+    // available at vote time, under the raw LID JID ("<lid>@lid"). Collect both
+    // so a member who voted via an unmapped LID isn't wrongly flagged as silent.
     const responses = await db.all(
         `SELECT voter_jid FROM poll_responses WHERE poll_msg_id = ?`,
         poll.poll_msg_id
     )
-    const respondedPhones = new Set(
-        responses.map(r => jidToPhone(r.voter_jid))
-    )
+    const respondedPhones = new Set()
+    const respondedLidUsers = new Set()
+    for (const r of responses) {
+        if (isLidUser(r.voter_jid)) {
+            respondedLidUsers.add(jidToPhone(r.voter_jid))
+        } else {
+            respondedPhones.add(jidToPhone(r.voter_jid))
+        }
+    }
 
-    // Find who hasn't responded
-    const nonResponders = primaries.filter(m => !respondedPhones.has(m.phone))
+    // Find who hasn't responded — by phone, or by resolving their phone→LID for
+    // any votes stored under an unmapped LID.
+    const nonResponders = []
+    for (const m of primaries) {
+        if (respondedPhones.has(m.phone)) continue
+        if (await memberRespondedViaLid(m.phone, respondedLidUsers, socket)) continue
+        nonResponders.push(m)
+    }
 
     if (nonResponders.length === 0) {
         console.log(`[POLL-HANDLER] ✅ All primaries responded to ${dayType} poll`)
@@ -348,4 +423,4 @@ async function remindNonResponders(dayType, sendTextMessage) {
     return { sent: true, count: sentCount, total: nonResponders.length, names: nonResponders.map(m => m.name) }
 }
 
-module.exports = { initPollTracking, trackPoll, handlePollVote, remindNonResponders, jidToPhone, resolveVoterPhone }
+module.exports = { initPollTracking, trackPoll, handlePollVote, remindNonResponders, jidToPhone, resolveVoterPhone, resolvePhoneToLidUser, memberRespondedViaLid }
