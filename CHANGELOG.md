@@ -13,6 +13,13 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/). Dates ar
 
 ---
 
+## 2026-07-20 — Temporarily disable false poll reminders
+
+### Changed
+- **Non-responder poll reminders (Thu/Sat 3 PM AST) are now OFF by default** behind `POLL_REMINDERS_ENABLED` (`src/scheduler.js`). Diagnosis of the 2026-07-18 poll (Log Analytics) showed **zero votes were ever recorded** — the reminder messaged all primaries as "non-responders," including one who had answered. Root cause: **Baileys 7.0.0-rc13 no longer emits poll-vote updates** — the `pollUpdateMessage` decryption block in `node_modules/baileys/lib/Utils/process-message.js` is commented out ("TODO: Remove entirely"), and the bot's vote pipeline relies on that `messages.update`/`pollUpdates` event. Until consumer-side `decryptPollVote` capture is implemented, reminders stay disabled to stop the incorrect messages. Set `POLL_REMINDERS_ENABLED=true` to re-enable once vote capture works.
+
+---
+
 ## 2026-07-18 — False 3 PM reminders (round 2): unmapped LID voters
 
 ### Fixed

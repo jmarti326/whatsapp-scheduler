@@ -4,6 +4,13 @@ const { sendTextMessage, sendPoll, getStatus, getSocket } = require('./bot')
 const { buildMondaySummary, buildWednesdayReminder, buildThursdayPoll, buildSaturdayReminder, buildSaturdayPoll, buildPersonalNotifications, getWeekDates } = require('./messages')
 const { initPollTracking, trackPoll, remindNonResponders } = require('./poll-handler')
 
+// Non-responder poll reminders are OFF unless explicitly enabled. Baileys 7
+// rc13 doesn't emit poll-vote updates, so no votes are recorded and the
+// reminder would message people who already voted. Flip to 'true' only once
+// consumer-side poll-vote decryption lands.
+const POLL_REMINDERS_ENABLED = process.env.POLL_REMINDERS_ENABLED === 'true'
+
+
 async function getGroupJid() {
     const db = await getDb()
     const row = await db.get("SELECT value FROM app_settings WHERE key = 'group_jid'")
@@ -181,21 +188,30 @@ function startScheduler() {
     } else {
         console.log('[SCHEDULER] 📥 Queue poll disabled — using push trigger (POST /internal/drain)')
     }
-    // Thursday 3:00 PM AST — Remind primaries who haven't responded to today's poll
-    cron.schedule('0 15 * * 4', async () => {
-        console.log('[CRON] Thursday poll reminder triggered')
-        await remindNonResponders('thursday', sendTextMessage, getSocket())
-    }, { timezone: 'America/Puerto_Rico' })
+    // Thursday & Saturday 3:00 PM AST — Remind primaries who haven't responded.
+    //
+    // TEMPORARILY DISABLED (default off). On Baileys 7.0.0-rc13 the library no
+    // longer emits poll-vote updates (its pollUpdateMessage decryption block is
+    // commented out), so NO votes are captured — every primary looks like a
+    // non-responder and this reminder wrongly messages people who DID vote.
+    // Keep this off until consumer-side poll-vote decryption is implemented.
+    // Re-enable by setting POLL_REMINDERS_ENABLED=true.
+    if (POLL_REMINDERS_ENABLED) {
+        cron.schedule('0 15 * * 4', async () => {
+            console.log('[CRON] Thursday poll reminder triggered')
+            await remindNonResponders('thursday', sendTextMessage, getSocket())
+        }, { timezone: 'America/Puerto_Rico' })
 
-    // Saturday 3:00 PM AST — Remind primaries who haven't responded to Sunday poll
-    cron.schedule('0 15 * * 6', async () => {
-        console.log('[CRON] Saturday poll reminder triggered')
-        await remindNonResponders('sunday', sendTextMessage, getSocket())
-    }, { timezone: 'America/Puerto_Rico' })
+        cron.schedule('0 15 * * 6', async () => {
+            console.log('[CRON] Saturday poll reminder triggered')
+            await remindNonResponders('sunday', sendTextMessage, getSocket())
+        }, { timezone: 'America/Puerto_Rico' })
+    } else {
+        console.log('[SCHEDULER] ⏸️ Poll non-responder reminders DISABLED (POLL_REMINDERS_ENABLED != true) — vote capture is broken on Baileys 7 rc13; avoids false reminders')
+    }
 
     console.log('[SCHEDULER] ✅ Cron jobs started (Mon/Wed/Thu/Sat at 8:00 AM AST)')
     console.log('[SCHEDULER] 📨 Personal DMs enabled for Wed (Thu team) and Sat (Sun team)')
-    console.log('[SCHEDULER] ⏰ Poll reminders at 3:00 PM AST (Thu & Sat) for non-responders')
 }
 
 let draining = false
