@@ -1,8 +1,7 @@
 name: Deploy to Vercel
 
-# Disabled auto-trigger — Vercel auto-deploys when connected to GitHub directly.
-# To enable this workflow, you need a FULL-ACCOUNT Vercel token (not project-scoped).
-# See the instructions below.
+# Manual production deployment. Uses Vercel's REST API so a least-privilege
+# project-scoped token works without the Vercel CLI's `vercel pull` limitation.
 on:
   workflow_dispatch:
 
@@ -17,11 +16,10 @@ on:
 #   5. Vercel auto-deploys on every push to master. Done!
 #
 # ALTERNATIVE (this workflow):
-#   If you want to use GitHub Actions instead of Vercel's built-in Git integration:
-#   1. Create a FULL-ACCOUNT token at vercel.com/account/tokens
-#      (NOT a project-scoped token — those cannot read project settings)
-#   2. Update the VERCEL_TOKEN secret with the full-account token
-#   3. Change the trigger above from workflow_dispatch to push/branches:[master]
+#   If you want GitHub Actions instead of Vercel's built-in Git integration,
+#   create a project-scoped token, save it as VERCEL_TOKEN, and dispatch this
+#   workflow. Change the trigger above to push/branches:[master] for automatic
+#   deployments.
 # ──────────────────────────────────────────────────────────────────────────────
 
 jobs:
@@ -33,28 +31,64 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install Vercel CLI
-        run: npm install --global vercel@latest
-
       - name: Deploy to Vercel
         id: deploy
         env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          mkdir -p .vercel
-          printf '{"orgId":"%s","projectId":"%s"}\n' "$VERCEL_ORG_ID" "$VERCEL_PROJECT_ID" > .vercel/project.json
-          vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-          vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-          URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
-          echo "url=$URL" >> $GITHUB_OUTPUT
-          echo "✅ Deployed to: $URL"
+          PAYLOAD=$(jq -n \
+            --arg project "$VERCEL_PROJECT_ID" \
+            --argjson repoId "${{ github.repository_id }}" \
+            --arg ref "${{ github.ref_name }}" \
+            --arg sha "${{ github.sha }}" \
+            '{
+              name: "ipr-church-scheduler",
+              project: $project,
+              target: "production",
+              gitSource: {
+                type: "github",
+                repoId: $repoId,
+                ref: $ref,
+                sha: $sha
+              }
+            }')
+
+          RESPONSE=$(curl --silent --show-error --fail-with-body \
+            --request POST "https://api.vercel.com/v13/deployments" \
+            --header "Authorization: Bearer $VERCEL_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "$PAYLOAD")
+
+          DEPLOYMENT_ID=$(jq -r '.id // empty' <<< "$RESPONSE")
+          DEPLOYMENT_HOST=$(jq -r '.url // empty' <<< "$RESPONSE")
+          if [ -z "$DEPLOYMENT_ID" ] || [ -z "$DEPLOYMENT_HOST" ]; then
+            echo "Vercel did not return a deployment id and URL"
+            jq '{error, message, code}' <<< "$RESPONSE"
+            exit 1
+          fi
+
+          for attempt in $(seq 1 60); do
+            STATUS=$(curl --silent --show-error --fail-with-body \
+              "https://api.vercel.com/v13/deployments/$DEPLOYMENT_ID" \
+              --header "Authorization: Bearer $VERCEL_TOKEN")
+            STATE=$(jq -r '.readyState // empty' <<< "$STATUS")
+            echo "Vercel deployment state: $STATE"
+            if [ "$STATE" = "READY" ]; then
+              URL="https://$DEPLOYMENT_HOST"
+              echo "url=$URL" >> "$GITHUB_OUTPUT"
+              echo "Deployed to: $URL"
+              exit 0
+            fi
+            if [ "$STATE" = "ERROR" ] || [ "$STATE" = "CANCELED" ]; then
+              jq '{readyState, errorCode, errorMessage}' <<< "$STATUS"
+              exit 1
+            fi
+            sleep 5
+          done
+
+          echo "Timed out waiting for Vercel deployment"
+          exit 1
 
       - name: Verify deployment
         if: steps.deploy.outputs.url != ''
