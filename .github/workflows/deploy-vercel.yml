@@ -44,6 +44,7 @@ jobs:
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           PAYLOAD=$(jq -n \
             --argjson repoId "${{ github.repository_id }}" \
@@ -89,6 +90,18 @@ jobs:
             STATE=$(jq -r '.readyState // empty' <<< "$STATUS")
             echo "Vercel deployment state: $STATE"
             if [ "$STATE" = "READY" ]; then
+              PROMOTE_CODE=$(curl --silent --show-error \
+                --output vercel-promote.json \
+                --write-out "%{http_code}" \
+                --request POST \
+                "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/promote/$DEPLOYMENT_ID" \
+                --header "Authorization: Bearer $VERCEL_TOKEN" \
+                --header "Content-Type: application/json")
+              if [ "$PROMOTE_CODE" -lt 200 ] || [ "$PROMOTE_CODE" -ge 300 ]; then
+                echo "Vercel promotion failed with HTTP $PROMOTE_CODE"
+                jq '{error, message, code}' vercel-promote.json
+                exit 1
+              fi
               URL="https://$DEPLOYMENT_HOST"
               echo "url=$URL" >> "$GITHUB_OUTPUT"
               echo "Deployed to: $URL"
@@ -107,7 +120,19 @@ jobs:
       - name: Verify deployment
         if: steps.deploy.outputs.url != ''
         run: |
-          sleep 10
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.deploy.outputs.url }}/login")
-          echo "HTTP status: $STATUS"
-          echo "✅ Deploy complete"
+          for attempt in $(seq 1 30); do
+            RESPONSE=$(curl --silent --show-error \
+              --write-out "\n%{http_code}" \
+              "https://ipr-church-scheduler.vercel.app/health")
+            STATUS=$(tail -n 1 <<< "$RESPONSE")
+            BODY=$(sed '$d' <<< "$RESPONSE")
+            COMMIT=$(jq -r '.commit // empty' <<< "$BODY" 2>/dev/null || true)
+            echo "Production health: HTTP $STATUS, commit ${COMMIT:-unknown}"
+            if [ "$STATUS" = "200" ] && [ "$COMMIT" = "${{ github.sha }}" ]; then
+              echo "Production portal is serving the expected commit"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Production portal did not serve commit ${{ github.sha }}"
+          exit 1
