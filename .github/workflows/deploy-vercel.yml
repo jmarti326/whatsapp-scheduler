@@ -34,6 +34,9 @@ jobs:
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          WORKER_TRIGGER_SECRET: ${{ secrets.WORKER_TRIGGER_SECRET }}
         run: |
           PAYLOAD=$(jq -n \
             --argjson repoId "${{ github.repository_id }}" \
@@ -72,6 +75,76 @@ jobs:
             jq '{error, message, code}' <<< "$RESPONSE"
             exit 1
           fi
+
+          ENV_PAYLOAD=$(jq -n \
+            --arg databaseUrl "$DATABASE_URL" \
+            --arg sessionSecret "$SESSION_SECRET" \
+            --arg workerSecret "$WORKER_TRIGGER_SECRET" \
+            '[
+              {
+                key: "DATABASE_URL",
+                value: $databaseUrl,
+                type: "sensitive",
+                target: ["production"]
+              },
+              {
+                key: "SESSION_SECRET",
+                value: $sessionSecret,
+                type: "sensitive",
+                target: ["production"]
+              },
+              {
+                key: "WORKER_TRIGGER_SECRET",
+                value: $workerSecret,
+                type: "sensitive",
+                target: ["production"]
+              },
+              {
+                key: "WORKER_TRIGGER_URL",
+                value: "https://team-scheduler-worker.kindplant-78d24cd8.eastus2.azurecontainerapps.io",
+                type: "plain",
+                target: ["production"]
+              },
+              {
+                key: "TRUST_PROXY",
+                value: "1",
+                type: "plain",
+                target: ["production"]
+              }
+            ]')
+
+          ENV_CODE=$(curl --silent --show-error \
+            --output vercel-env.json \
+            --write-out "%{http_code}" \
+            --request POST \
+            "https://api.vercel.com/v10/projects/$TARGET_PROJECT_ID/env?upsert=true" \
+            --header "Authorization: Bearer $VERCEL_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "$ENV_PAYLOAD")
+          if [ "$ENV_CODE" -lt 200 ] || [ "$ENV_CODE" -ge 300 ]; then
+            echo "Vercel environment update failed with HTTP $ENV_CODE"
+            jq '{error, failed}' vercel-env.json
+            exit 1
+          fi
+
+          # Project environment is snapshotted when a deployment is created.
+          # Create the release again after upserting its production variables.
+          HTTP_CODE=$(curl --silent --show-error \
+            --output vercel-response.json \
+            --write-out "%{http_code}" \
+            --request POST "https://api.vercel.com/v13/deployments?forceNew=1&skipAutoDetectionConfirmation=1" \
+            --header "Authorization: Bearer $VERCEL_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "$PAYLOAD")
+          RESPONSE=$(cat vercel-response.json)
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Vercel release deployment failed with HTTP $HTTP_CODE"
+            jq '{error, message, code}' <<< "$RESPONSE"
+            exit 1
+          fi
+          DEPLOYMENT_ID=$(jq -r '.id // empty' <<< "$RESPONSE")
+          DEPLOYMENT_HOST=$(jq -r '.url // empty' <<< "$RESPONSE")
+          TARGET_PROJECT_ID=$(jq -r '.projectId // .project.id // empty' <<< "$RESPONSE")
 
           for attempt in $(seq 1 60); do
             STATUS=$(curl --silent --show-error --fail-with-body \
