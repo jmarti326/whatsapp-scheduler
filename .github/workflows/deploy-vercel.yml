@@ -76,8 +76,9 @@ jobs:
 
           DEPLOYMENT_ID=$(jq -r '.id // empty' <<< "$RESPONSE")
           DEPLOYMENT_HOST=$(jq -r '.url // empty' <<< "$RESPONSE")
-          if [ -z "$DEPLOYMENT_ID" ] || [ -z "$DEPLOYMENT_HOST" ]; then
-            echo "Vercel did not return a deployment id and URL"
+          TARGET_PROJECT_ID=$(jq -r '.projectId // .project.id // empty' <<< "$RESPONSE")
+          if [ -z "$DEPLOYMENT_ID" ] || [ -z "$DEPLOYMENT_HOST" ] || [ -z "$TARGET_PROJECT_ID" ]; then
+            echo "Vercel did not return deployment and project identifiers"
             jq '{error, message, code}' <<< "$RESPONSE"
             exit 1
           fi
@@ -93,7 +94,7 @@ jobs:
                 --output vercel-promote.json \
                 --write-out "%{http_code}" \
                 --request POST \
-                "https://api.vercel.com/v10/projects/ipr-church-scheduler/promote/$DEPLOYMENT_ID" \
+                "https://api.vercel.com/v10/projects/$TARGET_PROJECT_ID/promote/$DEPLOYMENT_ID" \
                 --header "Authorization: Bearer $VERCEL_TOKEN" \
                 --header "Content-Type: application/json")
               if [ "$PROMOTE_CODE" -lt 200 ] || [ "$PROMOTE_CODE" -ge 300 ]; then
