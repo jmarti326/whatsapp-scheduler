@@ -35,16 +35,13 @@ jobs:
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           PAYLOAD=$(jq -n \
-            --arg project "$VERCEL_PROJECT_ID" \
             --argjson repoId "${{ github.repository_id }}" \
             --arg ref "${{ github.ref_name }}" \
             --arg sha "${{ github.sha }}" \
             '{
               name: "ipr-church-scheduler",
-              project: $project,
               target: "production",
               gitSource: {
                 type: "github",
