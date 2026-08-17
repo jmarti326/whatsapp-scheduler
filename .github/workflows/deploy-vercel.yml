@@ -94,6 +94,21 @@ jobs:
                 jq '{error, message, code}' vercel-promote.json
                 exit 1
               fi
+
+              ALIAS_CODE=$(curl --silent --show-error \
+                --output vercel-alias.json \
+                --write-out "%{http_code}" \
+                --request POST \
+                "https://api.vercel.com/v2/deployments/$DEPLOYMENT_ID/aliases" \
+                --header "Authorization: Bearer $VERCEL_TOKEN" \
+                --header "Content-Type: application/json" \
+                --data '{"alias":"ipr-church-scheduler.vercel.app"}')
+              if [ "$ALIAS_CODE" -lt 200 ] || [ "$ALIAS_CODE" -ge 300 ]; then
+                echo "Vercel production alias assignment failed with HTTP $ALIAS_CODE"
+                jq '{error, message, code}' vercel-alias.json
+                exit 1
+              fi
+
               URL="https://$DEPLOYMENT_HOST"
               echo "url=$URL" >> "$GITHUB_OUTPUT"
               echo "Deployed to: $URL"
