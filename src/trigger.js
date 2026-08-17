@@ -43,7 +43,10 @@ function startWorkerServer() {
         try {
             const connectionManager = require('./connection-manager')
             if (req.body?.resetAuth) {
-                await connectionManager.restartRegistration(req.params.id)
+                await connectionManager.restartRegistration(
+                    req.params.id,
+                    req.body?.registrationMethod || 'phone'
+                )
             } else {
                 const { getDb } = require('./db/index')
                 const db = await getDb()
@@ -101,10 +104,10 @@ function fireDrainTrigger() {
     return fireWorkerTrigger('/internal/drain')
 }
 
-function fireAccountReconnectTrigger(accountId, resetAuth = false) {
+function fireAccountReconnectTrigger(accountId, resetAuth = false, registrationMethod = 'phone') {
     return fireWorkerTrigger(
         `/internal/accounts/${encodeURIComponent(accountId)}/reconnect`,
-        { resetAuth },
+        { resetAuth, registrationMethod },
         10000
     )
 }

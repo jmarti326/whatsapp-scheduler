@@ -482,9 +482,10 @@ router.get('/api/accounts', async (req, res) => {
         const accounts = await db.all(`
             SELECT a.id, a.label, a.phone_number, a.priority, a.status,
                    a.last_connected_at, a.last_error, a.created_at,
-                   p.value AS pairing_code
+                   p.value AS pairing_code, q.value AS pairing_qr
             FROM wa_accounts a
             LEFT JOIN app_settings p ON p.key = 'pairing_code_' || a.id
+            LEFT JOIN app_settings q ON q.key = 'pairing_qr_' || a.id
             ORDER BY a.priority ASC, a.created_at ASC
         `)
         res.json(accounts)
@@ -495,8 +496,14 @@ router.get('/api/accounts', async (req, res) => {
 
 router.post('/api/accounts', async (req, res) => {
     if (!req.session.isAdmin) return res.status(403).json({ error: 'Admin only' })
-    const { label, phoneNumber, priority } = req.body
+    const { label, phoneNumber, priority, registrationMethod = 'phone' } = req.body
     if (!label) return res.status(400).json({ error: 'Label is required' })
+    if (!['phone', 'qr'].includes(registrationMethod)) {
+        return res.status(400).json({ error: 'Registration method must be phone or qr' })
+    }
+    if (registrationMethod === 'phone' && !phoneNumber) {
+        return res.status(400).json({ error: 'Phone number is required for phone pairing' })
+    }
     try {
         const db = await getDb()
         const crypto = require('crypto')
@@ -512,10 +519,10 @@ router.post('/api/accounts', async (req, res) => {
         if ((process.env.APP_ROLE || 'all') === 'all') {
             const cm = require('./connection-manager')
             const account = await db.get('SELECT * FROM wa_accounts WHERE id = ?', id)
-            await cm.connectOne(account)
+            await cm.connectOne(account, { registrationMethod })
         } else {
             const { fireAccountReconnectTrigger } = require('./trigger')
-            const trigger = await fireAccountReconnectTrigger(id, true)
+            const trigger = await fireAccountReconnectTrigger(id, true, registrationMethod)
             if (!trigger.ok) {
                 return res.status(502).json({
                     error: trigger.body?.error || trigger.error || 'Worker registration trigger failed',
@@ -571,23 +578,28 @@ router.delete('/api/accounts/:id', async (req, res) => {
 router.post('/api/accounts/:id/reconnect', async (req, res) => {
     if (!req.session.isAdmin) return res.status(403).json({ error: 'Admin only' })
     try {
+        const registrationMethod = req.body?.registrationMethod || 'phone'
+        if (!['phone', 'qr'].includes(registrationMethod)) {
+            return res.status(400).json({ error: 'Registration method must be phone or qr' })
+        }
         const db = await getDb()
         const account = await db.get('SELECT * FROM wa_accounts WHERE id = ?', req.params.id)
         if (!account) return res.status(404).json({ error: 'Account not found' })
-        const resetAuth = account.status === 'logged_out' ||
+        const resetAuth = registrationMethod === 'qr' ||
+            account.status === 'logged_out' ||
             account.status === 'pairing_failed' ||
             /(?:401|logged out|connection failure)/i.test(account.last_error || '')
 
         if ((process.env.APP_ROLE || 'all') === 'all') {
             const cm = require('./connection-manager')
-            if (resetAuth) await cm.restartRegistration(req.params.id)
+            if (resetAuth) await cm.restartRegistration(req.params.id, registrationMethod)
             else {
                 await cm.disconnectOne(req.params.id)
                 await cm.connectOne(account)
             }
         } else {
             const { fireAccountReconnectTrigger } = require('./trigger')
-            const trigger = await fireAccountReconnectTrigger(req.params.id, resetAuth)
+            const trigger = await fireAccountReconnectTrigger(req.params.id, resetAuth, registrationMethod)
             if (!trigger.ok) {
                 return res.status(502).json({
                     error: trigger.body?.error || trigger.error || 'Worker reconnect trigger failed',
@@ -597,6 +609,7 @@ router.post('/api/accounts/:id/reconnect', async (req, res) => {
         res.json({
             success: true,
             resetAuth,
+            registrationMethod,
             message: resetAuth
                 ? `Fresh registration started for "${account.label}"`
                 : `Reconnecting "${account.label}"...`,
@@ -611,9 +624,11 @@ router.get('/api/accounts/health', async (req, res) => {
         const db = await getDb()
         const accounts = await db.all(`
             SELECT a.id, a.label, a.phone_number, a.priority, a.status,
-                   a.last_connected_at, a.last_error, p.value AS pairing_code
+                   a.last_connected_at, a.last_error, p.value AS pairing_code,
+                   q.value AS pairing_qr
             FROM wa_accounts a
             LEFT JOIN app_settings p ON p.key = 'pairing_code_' || a.id
+            LEFT JOIN app_settings q ON q.key = 'pairing_qr_' || a.id
             ORDER BY a.priority ASC
         `)
         const total = accounts.length

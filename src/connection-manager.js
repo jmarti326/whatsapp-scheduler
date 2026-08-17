@@ -1,4 +1,5 @@
 const pino = require('pino')
+const QRCode = require('qrcode')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
@@ -81,7 +82,7 @@ async function connectAll() {
 /**
  * Connect a single account by its DB row.
  */
-async function connectOne(account) {
+async function connectOne(account, options = {}) {
     const {
         default: makeWASocket,
         useMultiFileAuthState,
@@ -97,7 +98,8 @@ async function connectOne(account) {
     const { state, saveCreds } = await useMultiFileAuthState(authPath)
     const { version } = await fetchLatestBaileysVersion()
 
-    const needsPairing = !!account.phone_number && !state.creds.registered
+    const registrationMethod = options.registrationMethod || (account.phone_number ? 'phone' : 'qr')
+    const needsPairing = registrationMethod === 'phone' && !!account.phone_number && !state.creds.registered
 
     const socket = makeWASocket({
         version,
@@ -138,13 +140,33 @@ async function connectOne(account) {
     }
 
     socket.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update
+        const { connection, lastDisconnect, qr } = update
         const conn = connections.get(account.id)
         if (!conn) return
+
+        if (qr && registrationMethod === 'qr') {
+            try {
+                const qrDataUrl = await QRCode.toDataURL(qr, {
+                    errorCorrectionLevel: 'M',
+                    margin: 2,
+                    width: 320,
+                })
+                await updateAccountQr(account.id, qrDataUrl)
+            } catch (err) {
+                console.error(`[CONN-MGR] Failed to generate QR for "${account.label}":`, err.message)
+                await updateAccountStatus(account.id, 'pairing_failed', err.message)
+            }
+        }
 
         if (connection === 'open') {
             conn.status = 'connected'
             console.log(`[CONN-MGR] ✅ "${account.label}" connected (priority ${account.priority})`)
+            const connectedPhone = String(socket.user?.id || '').split(':')[0].replace(/[^0-9]/g, '') || null
+            const db = await getDb()
+            if (connectedPhone) {
+                await db.run('UPDATE wa_accounts SET phone_number = ? WHERE id = ?', connectedPhone, account.id)
+            }
+            await clearRegistrationArtifacts(account.id)
             scheduleStatusWrite(account.id, 'connected')
             // Sync groups for this account, but not on every reconnect — group
             // membership rarely changes, and rewriting ~100 rows on each of the
@@ -162,7 +184,7 @@ async function connectOne(account) {
             if (statusCode !== DisconnectReason.loggedOut) {
                 const delay = statusCode === 408 || statusCode === 503 ? 15000 : 5000
                 console.log(`[CONN-MGR] 🔄 Reconnecting "${account.label}" in ${delay / 1000}s...`)
-                setTimeout(() => connectOne(account), delay)
+                setTimeout(() => connectOne(account, { registrationMethod }), delay)
             } else {
                 conn.status = 'logged_out'
                 scheduleStatusWrite(account.id, 'logged_out', reason)
@@ -176,14 +198,19 @@ async function connectOne(account) {
 }
 
 /**
- * Clear persisted credentials for an account and start a fresh phone-number
- * registration without deleting its label, phone number, or priority.
+ * Clear persisted credentials for an account and start a fresh registration
+ * without deleting its label, phone number, or priority.
  */
-async function restartRegistration(accountId) {
+async function restartRegistration(accountId, registrationMethod = 'phone') {
     const db = await getDb()
     const account = await db.get('SELECT * FROM wa_accounts WHERE id = ?', accountId)
     if (!account) throw new Error('Account not found')
-    if (!account.phone_number) throw new Error('Account has no phone number configured')
+    if (registrationMethod === 'phone' && !account.phone_number) {
+        throw new Error('Account has no phone number configured')
+    }
+    if (!['phone', 'qr'].includes(registrationMethod)) {
+        throw new Error('Unsupported registration method')
+    }
 
     await disconnectOne(accountId)
 
@@ -192,9 +219,12 @@ async function restartRegistration(accountId) {
         fs.rmSync(authPath, { recursive: true, force: true })
     }
 
-    await db.run('DELETE FROM app_settings WHERE key = ?', `pairing_code_${accountId}`)
+    await clearRegistrationArtifacts(accountId)
     await updateAccountStatus(accountId, 'registering', null)
-    return connectOne(account)
+    const registrationAccount = registrationMethod === 'qr'
+        ? { ...account, phone_number: null }
+        : account
+    return connectOne(registrationAccount, { registrationMethod })
 }
 
 /**
@@ -436,7 +466,7 @@ async function updateAccountStatus(accountId, status, error, pairingCode) {
     await db.run(`UPDATE wa_accounts SET ${updates.join(', ')} WHERE id = ?`, ...args)
 
     if (status === 'connected') {
-        await db.run('DELETE FROM app_settings WHERE key = ?', `pairing_code_${accountId}`)
+        await clearRegistrationArtifacts(accountId, db)
     }
 
     // Store pairing code in app_settings if provided
@@ -446,6 +476,25 @@ async function updateAccountStatus(accountId, status, error, pairingCode) {
             `pairing_code_${accountId}`, pairingCode
         )
     }
+}
+
+async function clearRegistrationArtifacts(accountId, existingDb) {
+    const db = existingDb || await getDb()
+    await db.run(
+        'DELETE FROM app_settings WHERE key IN (?, ?)',
+        `pairing_code_${accountId}`,
+        `pairing_qr_${accountId}`
+    )
+}
+
+async function updateAccountQr(accountId, qrDataUrl) {
+    const db = await getDb()
+    await db.run(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+        `pairing_qr_${accountId}`,
+        qrDataUrl
+    )
+    await updateAccountStatus(accountId, 'waiting_for_qr', null)
 }
 
 const lastGroupSync = new Map() // accountId → epoch ms of last successful sync

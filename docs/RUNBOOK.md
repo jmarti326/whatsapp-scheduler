@@ -32,6 +32,12 @@ to wipe only that account's persisted credentials and start a clean
 registration. After about three seconds, refresh the account list if necessary;
 the fresh pairing code is displayed below the account.
 
+Alternatively, click the account's **QR** button. The worker wipes the stale
+credentials and publishes a rotating QR code in the portal. On the phone, open
+**WhatsApp → Settings → Linked Devices → Link a device** and scan it. New
+failover accounts can also be created with **Scan QR** without entering their
+phone number; the number is saved automatically after WhatsApp connects.
+
 If the portal-to-worker trigger is unavailable, use the manual recovery:
 
 1. Find the account id (visible in logs, e.g. `Synced … for account df0059b8-…` or `Failed to sync groups for <id>`).

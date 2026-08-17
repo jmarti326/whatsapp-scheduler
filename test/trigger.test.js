@@ -47,11 +47,14 @@ test('fireAccountReconnectTrigger: calls the worker with resetAuth', async () =>
     }
 
     try {
-        const result = await fireAccountReconnectTrigger('account id', true)
+        const result = await fireAccountReconnectTrigger('account id', true, 'qr')
         assert.strictEqual(result.ok, true)
         assert.strictEqual(request.url, 'https://worker.example.test/internal/accounts/account%20id/reconnect')
         assert.strictEqual(request.options.headers.authorization, 'Bearer shared-secret')
-        assert.deepStrictEqual(JSON.parse(request.options.body), { resetAuth: true })
+        assert.deepStrictEqual(JSON.parse(request.options.body), {
+            resetAuth: true,
+            registrationMethod: 'qr',
+        })
     } finally {
         global.fetch = savedFetch
         if (savedUrl === undefined) delete process.env.WORKER_TRIGGER_URL
