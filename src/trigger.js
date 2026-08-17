@@ -1,16 +1,9 @@
 /**
- * On-demand queue trigger.
+ * Authenticated portal-to-worker operational triggers.
  *
- * The Vercel frontend (APP_ROLE=api) has no WhatsApp connection, so when a user
- * hits "send now" it writes a row to pending_sends and then calls the worker's
- * POST /internal/drain endpoint. The worker (APP_ROLE=worker) drains the queue
- * immediately — no polling required, so the database can stay idle between real
- * events instead of being kept awake 24/7.
- *
- * Auth is a shared bearer secret (WORKER_TRIGGER_SECRET). If the secret or the
- * URL is not configured the trigger degrades gracefully: the frontend simply
- * skips the call and the send is picked up by the optional safety-net poll (see
- * PENDING_SENDS_POLL_MS in scheduler.js).
+ * The Vercel frontend has no WhatsApp connection or persistent auth storage.
+ * It calls these Azure worker endpoints for queue drains and account lifecycle
+ * operations.
  */
 
 const express = require('express')
@@ -23,10 +16,6 @@ function secretsMatch(a, b) {
     return crypto.timingSafeEqual(ab, bb)
 }
 
-/**
- * Start the minimal worker HTTP server. Exposes only a health check and the
- * authenticated drain trigger — no session, no static assets, no portal.
- */
 function startWorkerServer() {
     const { processPendingSends } = require('./scheduler')
     const PORT = parseInt(process.env.PORT || '3000', 10)
@@ -37,51 +26,93 @@ function startWorkerServer() {
 
     app.get('/health', (req, res) => res.json({ ok: true, role: 'worker' }))
 
-    app.post('/internal/drain', (req, res) => {
+    function requireTriggerAuth(req, res, next) {
         if (!SECRET) return res.status(503).json({ error: 'trigger not configured' })
         const auth = req.get('authorization') || ''
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
         if (!secretsMatch(token, SECRET)) return res.status(401).json({ error: 'unauthorized' })
+        next()
+    }
 
-        // Respond immediately; drain asynchronously so the frontend isn't blocked
-        // on WhatsApp round-trips.
+    app.post('/internal/drain', requireTriggerAuth, (req, res) => {
         setImmediate(() => processPendingSends().catch(() => {}))
         res.json({ ok: true, triggered: true })
     })
 
+    app.post('/internal/accounts/:id/reconnect', requireTriggerAuth, async (req, res) => {
+        try {
+            const connectionManager = require('./connection-manager')
+            if (req.body?.resetAuth) {
+                await connectionManager.restartRegistration(req.params.id)
+            } else {
+                const { getDb } = require('./db/index')
+                const db = await getDb()
+                const account = await db.get('SELECT * FROM wa_accounts WHERE id = ?', req.params.id)
+                if (!account) return res.status(404).json({ error: 'Account not found' })
+                await connectionManager.disconnectOne(req.params.id)
+                await connectionManager.connectOne(account)
+            }
+            res.json({ ok: true, triggered: true })
+        } catch (err) {
+            console.error(`[WORKER] Account reconnect failed for ${req.params.id}:`, err.message)
+            res.status(500).json({ error: err.message })
+        }
+    })
+
     if (!SECRET) {
-        console.warn('[WORKER] ⚠️ WORKER_TRIGGER_SECRET not set — /internal/drain will reject all calls')
+        console.warn('[WORKER] WORKER_TRIGGER_SECRET not set; internal triggers will reject calls')
     }
     app.listen(PORT, '0.0.0.0', () => {
-        console.log(`[WORKER] 🩺 Trigger server on :${PORT} (GET /health, POST /internal/drain)`)
+        console.log(`[WORKER] Trigger server on :${PORT}`)
     })
 }
 
-/**
- * Fire the drain trigger from the frontend side after enqueuing. Best-effort:
- * never throws, short timeout, returns a small status object for logging.
- */
-async function fireDrainTrigger() {
+async function fireWorkerTrigger(path, body = {}, timeoutMs = 4000) {
     const base = process.env.WORKER_TRIGGER_URL
     const secret = process.env.WORKER_TRIGGER_SECRET
     if (!base || !secret) return { skipped: true, reason: 'not_configured' }
 
-    const url = base.replace(/\/+$/, '') + '/internal/drain'
+    const url = base.replace(/\/+$/, '') + path
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 4000)
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
         const resp = await fetch(url, {
             method: 'POST',
-            headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
-            body: '{}',
+            headers: {
+                authorization: 'Bearer ' + secret,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify(body),
             signal: controller.signal,
         })
-        return { ok: resp.ok, status: resp.status }
-    } catch (e) {
-        return { ok: false, error: e.message }
+        let responseBody = null
+        try {
+            responseBody = await resp.json()
+        } catch {}
+        return { ok: resp.ok, status: resp.status, body: responseBody }
+    } catch (err) {
+        return { ok: false, error: err.message }
     } finally {
         clearTimeout(timer)
     }
 }
 
-module.exports = { startWorkerServer, fireDrainTrigger, secretsMatch }
+function fireDrainTrigger() {
+    return fireWorkerTrigger('/internal/drain')
+}
+
+function fireAccountReconnectTrigger(accountId, resetAuth = false) {
+    return fireWorkerTrigger(
+        `/internal/accounts/${encodeURIComponent(accountId)}/reconnect`,
+        { resetAuth },
+        10000
+    )
+}
+
+module.exports = {
+    startWorkerServer,
+    fireDrainTrigger,
+    fireAccountReconnectTrigger,
+    fireWorkerTrigger,
+    secretsMatch,
+}

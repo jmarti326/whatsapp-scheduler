@@ -24,7 +24,15 @@ The code changes on each attempt and the account never connects. The portal show
 
 **Root cause.** The account was logged out (`creds.registered = false`), but a **previous** session left `creds.json` + signal/pre-keys on the auth volume. Baileys loads those partial credentials and attempts a (failing) login instead of a clean registration → instant 401. Restarting alone does **not** help because the stale files persist on the Azure Files volume. Repeated deploy/restart churn makes it worse (each spawns a new failing pairing attempt).
 
-**Fix — wipe the account's auth folder, then pair fresh.**
+**Fix — restart registration from the portal.**
+
+For an account marked `logged_out`, `pairing_failed`, or failed with 401, click
+the reconnect button in **WhatsApp Accounts**. The portal asks the Azure worker
+to wipe only that account's persisted credentials and start a clean
+registration. After about three seconds, refresh the account list if necessary;
+the fresh pairing code is displayed below the account.
+
+If the portal-to-worker trigger is unavailable, use the manual recovery:
 
 1. Find the account id (visible in logs, e.g. `Synced … for account df0059b8-…` or `Failed to sync groups for <id>`).
 2. Get the storage key and delete everything under that account's auth folder:

@@ -1,7 +1,7 @@
 const { test } = require('node:test')
 const assert = require('node:assert')
 
-const { fireDrainTrigger, secretsMatch } = require('../src/trigger')
+const { fireAccountReconnectTrigger, fireDrainTrigger, secretsMatch } = require('../src/trigger')
 
 test('secretsMatch: identical secrets match', () => {
     assert.strictEqual(secretsMatch('super-secret-token', 'super-secret-token'), true)
@@ -31,5 +31,32 @@ test('fireDrainTrigger: skips when WORKER_TRIGGER_URL / secret are not configure
     } finally {
         if (savedUrl !== undefined) process.env.WORKER_TRIGGER_URL = savedUrl
         if (savedSecret !== undefined) process.env.WORKER_TRIGGER_SECRET = savedSecret
+    }
+})
+
+test('fireAccountReconnectTrigger: calls the worker with resetAuth', async () => {
+    const savedUrl = process.env.WORKER_TRIGGER_URL
+    const savedSecret = process.env.WORKER_TRIGGER_SECRET
+    const savedFetch = global.fetch
+    process.env.WORKER_TRIGGER_URL = 'https://worker.example.test/'
+    process.env.WORKER_TRIGGER_SECRET = 'shared-secret'
+    let request
+    global.fetch = async (url, options) => {
+        request = { url, options }
+        return { ok: true, status: 200, json: async () => ({ ok: true }) }
+    }
+
+    try {
+        const result = await fireAccountReconnectTrigger('account id', true)
+        assert.strictEqual(result.ok, true)
+        assert.strictEqual(request.url, 'https://worker.example.test/internal/accounts/account%20id/reconnect')
+        assert.strictEqual(request.options.headers.authorization, 'Bearer shared-secret')
+        assert.deepStrictEqual(JSON.parse(request.options.body), { resetAuth: true })
+    } finally {
+        global.fetch = savedFetch
+        if (savedUrl === undefined) delete process.env.WORKER_TRIGGER_URL
+        else process.env.WORKER_TRIGGER_URL = savedUrl
+        if (savedSecret === undefined) delete process.env.WORKER_TRIGGER_SECRET
+        else process.env.WORKER_TRIGGER_SECRET = savedSecret
     }
 })

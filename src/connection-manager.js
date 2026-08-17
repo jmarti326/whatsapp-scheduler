@@ -1,4 +1,3 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('baileys')
 const pino = require('pino')
 const path = require('path')
 const fs = require('fs')
@@ -16,6 +15,12 @@ const connections = new Map() // accountId → { socket, status, priority, label
 // scope so it can be (re)wired onto every new socket — including the fresh
 // sockets created on reconnect — not just the ones that existed at startup.
 let pollHandler = null
+let baileysPromise = null
+
+function loadBaileys() {
+    if (!baileysPromise) baileysPromise = import('baileys')
+    return baileysPromise
+}
 
 /**
  * Wire the registered poll-vote handler onto a single socket's messages.update
@@ -77,6 +82,13 @@ async function connectAll() {
  * Connect a single account by its DB row.
  */
 async function connectOne(account) {
+    const {
+        default: makeWASocket,
+        useMultiFileAuthState,
+        DisconnectReason,
+        fetchLatestBaileysVersion,
+        makeCacheableSignalKeyStore,
+    } = await loadBaileys()
     const authPath = path.join(AUTH_BASE, account.id)
     if (!fs.existsSync(authPath)) {
         fs.mkdirSync(authPath, { recursive: true })
@@ -161,6 +173,28 @@ async function connectOne(account) {
     socket.ev.on('creds.update', saveCreds)
 
     return socket
+}
+
+/**
+ * Clear persisted credentials for an account and start a fresh phone-number
+ * registration without deleting its label, phone number, or priority.
+ */
+async function restartRegistration(accountId) {
+    const db = await getDb()
+    const account = await db.get('SELECT * FROM wa_accounts WHERE id = ?', accountId)
+    if (!account) throw new Error('Account not found')
+    if (!account.phone_number) throw new Error('Account has no phone number configured')
+
+    await disconnectOne(accountId)
+
+    const authPath = path.join(AUTH_BASE, accountId)
+    if (fs.existsSync(authPath)) {
+        fs.rmSync(authPath, { recursive: true, force: true })
+    }
+
+    await db.run('DELETE FROM app_settings WHERE key = ?', `pairing_code_${accountId}`)
+    await updateAccountStatus(accountId, 'registering', null)
+    return connectOne(account)
 }
 
 /**
@@ -401,6 +435,10 @@ async function updateAccountStatus(accountId, status, error, pairingCode) {
     args.push(accountId)
     await db.run(`UPDATE wa_accounts SET ${updates.join(', ')} WHERE id = ?`, ...args)
 
+    if (status === 'connected') {
+        await db.run('DELETE FROM app_settings WHERE key = ?', `pairing_code_${accountId}`)
+    }
+
     // Store pairing code in app_settings if provided
     if (pairingCode) {
         await db.run(
@@ -528,6 +566,7 @@ function getAllConnections() {
 module.exports = {
     connectAll,
     connectOne,
+    restartRegistration,
     disconnectOne,
     getHealthySockets,
     sendWithFailover,

@@ -1,8 +1,16 @@
 const { getDb } = require('./db/index')
-const { jidDecode, isLidUser } = require('baileys')
 const { getAssignedMembers, getWeekDates } = require('./messages')
 
 const AUTO_FOOTER = '\n\n_🤖 Mensaje enviado automáticamente por IPR Team Scheduler AI Agent_'
+
+function jidDecode(jid) {
+    const match = /^([^:@]+)(?::(\d+))?@(.+)$/.exec(String(jid || ''))
+    return match ? { user: match[1], device: match[2] ? Number(match[2]) : undefined, server: match[3] } : undefined
+}
+
+function isLidUser(jid) {
+    return String(jid || '').endsWith('@lid')
+}
 
 /**
  * Normalize any WhatsApp JID to a bare phone number (digits only), matching the
