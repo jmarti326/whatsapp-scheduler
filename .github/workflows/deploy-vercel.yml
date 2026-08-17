@@ -44,7 +44,6 @@ jobs:
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           PAYLOAD=$(jq -n \
             --argjson repoId "${{ github.repository_id }}" \
@@ -94,7 +93,7 @@ jobs:
                 --output vercel-promote.json \
                 --write-out "%{http_code}" \
                 --request POST \
-                "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/promote/$DEPLOYMENT_ID" \
+                "https://api.vercel.com/v10/projects/ipr-church-scheduler/promote/$DEPLOYMENT_ID" \
                 --header "Authorization: Bearer $VERCEL_TOKEN" \
                 --header "Content-Type: application/json")
               if [ "$PROMOTE_CODE" -lt 200 ] || [ "$PROMOTE_CODE" -ge 300 ]; then
