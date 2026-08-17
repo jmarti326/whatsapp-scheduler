@@ -129,6 +129,14 @@ async function start() {
         req.session.destroy(() => res.json({ success: true }))
     })
 
+    app.get('/health', (req, res) => {
+        res.json({
+            ok: true,
+            role: APP_ROLE,
+            commit: process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || null,
+        })
+    })
+
     app.use(requireAuth)
     app.use(express.static(path.join(__dirname, '..', 'views')))
     app.use(routes)
