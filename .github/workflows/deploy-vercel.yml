@@ -3,15 +3,6 @@ name: Deploy to Vercel
 # Manual production deployment. Uses Vercel's REST API so a least-privilege
 # project-scoped token works without the Vercel CLI's `vercel pull` limitation.
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'src/**'
-      - 'views/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'vercel.json'
-      - '.github/workflows/deploy-vercel.yml'
   workflow_dispatch:
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -26,9 +17,8 @@ on:
 #
 # ALTERNATIVE (this workflow):
 #   If you want GitHub Actions instead of Vercel's built-in Git integration,
-#   create a project-scoped token and save it as VERCEL_TOKEN. Pushes affecting
-#   the portal deploy automatically; workflow_dispatch remains available for
-#   manual redeployments.
+#   save a token scoped to the same project that owns the public production
+#   domain as VERCEL_TOKEN, then dispatch this workflow.
 # ──────────────────────────────────────────────────────────────────────────────
 
 jobs:
@@ -97,7 +87,9 @@ jobs:
                 "https://api.vercel.com/v10/projects/$TARGET_PROJECT_ID/promote/$DEPLOYMENT_ID" \
                 --header "Authorization: Bearer $VERCEL_TOKEN" \
                 --header "Content-Type: application/json")
-              if [ "$PROMOTE_CODE" -lt 200 ] || [ "$PROMOTE_CODE" -ge 300 ]; then
+              ALREADY_CURRENT=$(jq -r '.error.message // empty' vercel-promote.json)
+              if { [ "$PROMOTE_CODE" -lt 200 ] || [ "$PROMOTE_CODE" -ge 300 ]; } &&
+                 [[ "$ALREADY_CURRENT" != *"already the current production deployment"* ]]; then
                 echo "Vercel promotion failed with HTTP $PROMOTE_CODE"
                 jq '{error, message, code}' vercel-promote.json
                 exit 1
