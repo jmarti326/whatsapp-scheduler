@@ -54,11 +54,19 @@ jobs:
               }
             }')
 
-          RESPONSE=$(curl --silent --show-error --fail-with-body \
-            --request POST "https://api.vercel.com/v13/deployments" \
+          HTTP_CODE=$(curl --silent --show-error \
+            --output vercel-response.json \
+            --write-out "%{http_code}" \
+            --request POST "https://api.vercel.com/v13/deployments?forceNew=1&skipAutoDetectionConfirmation=1" \
             --header "Authorization: Bearer $VERCEL_TOKEN" \
             --header "Content-Type: application/json" \
             --data "$PAYLOAD")
+          RESPONSE=$(cat vercel-response.json)
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Vercel deployment request failed with HTTP $HTTP_CODE"
+            jq '{error, message, code}' <<< "$RESPONSE"
+            exit 1
+          fi
 
           DEPLOYMENT_ID=$(jq -r '.id // empty' <<< "$RESPONSE")
           DEPLOYMENT_HOST=$(jq -r '.url // empty' <<< "$RESPONSE")
