@@ -3,6 +3,15 @@ name: Deploy to Vercel
 # Manual production deployment. Uses Vercel's REST API so a least-privilege
 # project-scoped token works without the Vercel CLI's `vercel pull` limitation.
 on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'views/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vercel.json'
+      - '.github/workflows/deploy-vercel.yml'
   workflow_dispatch:
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -17,9 +26,9 @@ on:
 #
 # ALTERNATIVE (this workflow):
 #   If you want GitHub Actions instead of Vercel's built-in Git integration,
-#   create a project-scoped token, save it as VERCEL_TOKEN, and dispatch this
-#   workflow. Change the trigger above to push/branches:[master] for automatic
-#   deployments.
+#   create a project-scoped token and save it as VERCEL_TOKEN. Pushes affecting
+#   the portal deploy automatically; workflow_dispatch remains available for
+#   manual redeployments.
 # ──────────────────────────────────────────────────────────────────────────────
 
 jobs:
