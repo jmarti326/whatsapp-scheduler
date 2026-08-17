@@ -23,6 +23,12 @@ function loadBaileys() {
     return baileysPromise
 }
 
+function isPairingRequestStillNeeded(connection, socket) {
+    return !!connection &&
+        connection.socket === socket &&
+        connection.status !== 'connected'
+}
+
 /**
  * Wire the registered poll-vote handler onto a single socket's messages.update
  * stream. Safe to call for every socket we create; does nothing until a handler
@@ -128,6 +134,7 @@ async function connectOne(account, options = {}) {
     if (needsPairing) {
         setTimeout(async () => {
             try {
+                if (!isPairingRequestStillNeeded(connections.get(account.id), socket)) return
                 const phone = account.phone_number.replace(/[^0-9]/g, '')
                 const code = await socket.requestPairingCode(phone)
                 console.log(`[CONN-MGR] 📱 Account "${account.label}" pairing code: ${code}`)
@@ -630,4 +637,5 @@ module.exports = {
     filterAllowedGroups,
     normalizeGroupKey: require('./group-filter').normalizeGroupKey,
     parseGroupAllowlist,
+    isPairingRequestStillNeeded,
 }
