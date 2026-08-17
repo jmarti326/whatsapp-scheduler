@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt')
 
 // Bot and scheduler functions are loaded lazily to avoid pulling in ESM-only baileys on Vercel
 function getBotModule() {
+    if (process.env.APP_ROLE === 'api') return null
     try { return require('./bot') } catch { return null }
 }
 function getSchedulerModule() {
