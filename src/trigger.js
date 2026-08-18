@@ -62,6 +62,17 @@ function startWorkerServer() {
         }
     })
 
+    app.post('/internal/accounts/:id/remove', requireTriggerAuth, async (req, res) => {
+        try {
+            const connectionManager = require('./connection-manager')
+            await connectionManager.removeAccount(req.params.id)
+            res.json({ ok: true, removed: true })
+        } catch (err) {
+            console.error(`[WORKER] Account removal failed for ${req.params.id}:`, err.message)
+            res.status(500).json({ error: err.message })
+        }
+    })
+
     if (!SECRET) {
         console.warn('[WORKER] WORKER_TRIGGER_SECRET not set; internal triggers will reject calls')
     }
@@ -112,10 +123,19 @@ function fireAccountReconnectTrigger(accountId, resetAuth = false, registrationM
     )
 }
 
+function fireAccountRemoveTrigger(accountId) {
+    return fireWorkerTrigger(
+        `/internal/accounts/${encodeURIComponent(accountId)}/remove`,
+        {},
+        10000
+    )
+}
+
 module.exports = {
     startWorkerServer,
     fireDrainTrigger,
     fireAccountReconnectTrigger,
+    fireAccountRemoveTrigger,
     fireWorkerTrigger,
     secretsMatch,
 }

@@ -561,14 +561,17 @@ router.put('/api/accounts/:id/priority', async (req, res) => {
 router.delete('/api/accounts/:id', async (req, res) => {
     if (!req.session.isAdmin) return res.status(403).json({ error: 'Admin only' })
     try {
-        // Use connection manager if available (handles socket disconnect + file cleanup)
-        try {
+        if ((process.env.APP_ROLE || 'all') === 'all') {
             const cm = require('./connection-manager')
             await cm.removeAccount(req.params.id)
-        } catch {
-            // Fallback: just delete from DB
-            const db = await getDb()
-            await db.run('DELETE FROM wa_accounts WHERE id = ?', req.params.id)
+        } else {
+            const { fireAccountRemoveTrigger } = require('./trigger')
+            const trigger = await fireAccountRemoveTrigger(req.params.id)
+            if (!trigger.ok) {
+                return res.status(502).json({
+                    error: trigger.body?.error || trigger.error || 'Worker account removal failed',
+                })
+            }
         }
         res.json({ success: true })
     } catch (err) {
