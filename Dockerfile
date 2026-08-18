@@ -1,5 +1,5 @@
 # ---- Builder stage: compile native modules (e.g. better-sqlite3) ----
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 WORKDIR /app
 
@@ -13,7 +13,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 # ---- Runtime stage: lean image without build tools ----
-FROM node:20-slim
+FROM node:22-slim
 
 WORKDIR /app
 
