@@ -10,6 +10,7 @@ function getBotModule() {
     try { return require('./bot') } catch { return null }
 }
 function getSchedulerModule() {
+    if (process.env.APP_ROLE === 'api') return null
     try { return require('./scheduler') } catch { return null }
 }
 function getStatus() {
