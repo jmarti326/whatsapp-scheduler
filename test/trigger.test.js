@@ -61,31 +61,32 @@ test('fireAccountReconnectTrigger: calls the worker with resetAuth', async () =>
             registrationMethod: 'qr',
         })
 
-        test('fireAccountRemoveTrigger: calls the worker removal endpoint', async () => {
-            const savedUrl = process.env.WORKER_TRIGGER_URL
-            const savedSecret = process.env.WORKER_TRIGGER_SECRET
-            const savedFetch = global.fetch
-            process.env.WORKER_TRIGGER_URL = 'https://worker.example.test'
-            process.env.WORKER_TRIGGER_SECRET = 'shared-secret'
-            let request
-            global.fetch = async (url, options) => {
-                request = { url, options }
-                return { ok: true, status: 200, json: async () => ({ ok: true }) }
-            }
+    } finally {
+        global.fetch = savedFetch
+        if (savedUrl === undefined) delete process.env.WORKER_TRIGGER_URL
+        else process.env.WORKER_TRIGGER_URL = savedUrl
+        if (savedSecret === undefined) delete process.env.WORKER_TRIGGER_SECRET
+        else process.env.WORKER_TRIGGER_SECRET = savedSecret
+    }
+})
 
-            try {
-                const result = await fireAccountRemoveTrigger('account id')
-                assert.strictEqual(result.ok, true)
-                assert.strictEqual(request.url, 'https://worker.example.test/internal/accounts/account%20id/remove')
-                assert.deepStrictEqual(JSON.parse(request.options.body), {})
-            } finally {
-                global.fetch = savedFetch
-                if (savedUrl === undefined) delete process.env.WORKER_TRIGGER_URL
-                else process.env.WORKER_TRIGGER_URL = savedUrl
-                if (savedSecret === undefined) delete process.env.WORKER_TRIGGER_SECRET
-                else process.env.WORKER_TRIGGER_SECRET = savedSecret
-            }
-        })
+test('fireAccountRemoveTrigger: calls the worker removal endpoint', async () => {
+    const savedUrl = process.env.WORKER_TRIGGER_URL
+    const savedSecret = process.env.WORKER_TRIGGER_SECRET
+    const savedFetch = global.fetch
+    process.env.WORKER_TRIGGER_URL = 'https://worker.example.test'
+    process.env.WORKER_TRIGGER_SECRET = 'shared-secret'
+    let request
+    global.fetch = async (url, options) => {
+        request = { url, options }
+        return { ok: true, status: 200, json: async () => ({ ok: true }) }
+    }
+
+    try {
+        const result = await fireAccountRemoveTrigger('account id')
+        assert.strictEqual(result.ok, true)
+        assert.strictEqual(request.url, 'https://worker.example.test/internal/accounts/account%20id/remove')
+        assert.deepStrictEqual(JSON.parse(request.options.body), {})
     } finally {
         global.fetch = savedFetch
         if (savedUrl === undefined) delete process.env.WORKER_TRIGGER_URL
