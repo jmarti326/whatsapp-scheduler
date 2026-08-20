@@ -101,7 +101,7 @@ jobs:
           imageToDeploy: ${{ needs.build-and-push.outputs.image }}
 
       - name: Set Container App secrets / env vars
-        uses: azure/CLI@v2
+        uses: azure/CLI@v3
         with:
           inlineScript: |
             az containerapp secret set \
@@ -137,7 +137,7 @@ jobs:
             fi
 
       - name: Verify deployment
-        uses: azure/CLI@v2
+        uses: azure/CLI@v3
         with:
           inlineScript: |
             STATE=$(az containerapp show \
