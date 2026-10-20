@@ -13,6 +13,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/). Dates ar
 
 ---
 
+## 2026-10-20 - Dependabot maintenance
+
+### Security
+- Update `proxy-addr` to 2.0.8, `music-metadata` to 11.16.1, `ip-address` to 10.7.4, `sharp` to 0.35.5, and `qs` to 6.16.0 to address the ten open dependency security alerts.
+
+### Changed
+- Update `express-rate-limit` to 8.7.1 and the test dependency `sql.js` to 1.14.2.
+- Upgrade deployment actions to `docker/build-push-action@v7`, `azure/login@v3`, and `azure/CLI@v3`. These actions use Node.js 24 on the GitHub-hosted runner; the application remains on Node.js 22. The Docker action requires runner 2.327.1 or newer, provided by `ubuntu-latest`.
+
+---
+
 ## 2026-07-20 — Temporarily disable false poll reminders
 
 ### Changed
